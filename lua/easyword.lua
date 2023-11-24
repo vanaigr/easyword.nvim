@@ -1,0 +1,307 @@
+local api = vim.api
+
+local function replace_keycodes(s)
+    return api.nvim_replace_termcodes(s, true, false, true)
+end
+
+local esc = replace_keycodes("<esc>")
+local function get_input()
+    local ok, ch = pcall(vim.fn.getcharstr)
+    if ok and ch ~= esc then return ch
+    else return nil end
+end
+
+
+-- patterns and functions for testing if a character should be considered a target
+local matches = {
+    upper = [=[\v[[:upper:]]\C]=],
+    lower = [=[\v[[:lower:]]\C]=],
+    digit = [=[\v[[:digit:]]\C]=],
+    word  = [=[\v[[:upper:][:lower:][:digit:]]\C]=],
+}
+local function test(char, match)
+    if char == nil then return false -- vim.fn.match returns false for nil char, but not if pattern contains `[:lower:]`
+    else return vim.fn.match(char, match) == 0 end
+end
+
+local function test_split_identifiers(chars, cur_i)
+    local cur_char = chars[cur_i]
+
+    local is_match = false
+
+    if test(cur_char, matches.upper) then
+        local prev_char = chars[cur_i - 1]
+        if not test(prev_char, matches.upper) then is_match = true
+        else
+            local next_char = chars[cur_i + 1]
+            is_match = test(next_char, matches.word) and not test(next_char, matches.upper)
+        end
+    elseif test(cur_char, matches.digit) then
+        is_match = not test(chars[cur_i - 1], matches.digit)
+    elseif test(cur_char, matches.lower) then
+        is_match = not test(chars[cur_i - 1], matches.word) or test(chars[cur_i - 1], matches.digit)
+    else
+        local prev_char = chars[cur_i - 1]
+        is_match = prev_char ~= cur_char -- matching only first character in ==, [[ and ]]
+    end
+
+    return is_match
+end
+
+local function get_targets(winid, test_func, prematch)
+    local wininfo = vim.fn.getwininfo(winid)[1]
+    local bufId = vim.api.nvim_win_get_buf(winid)
+    local lnum = wininfo.topline
+    local botline = wininfo.botline
+
+    local targets = {}
+
+    while lnum <= botline do
+        local fold_end = vim.fn.foldclosedend(lnum) -- winId?
+        if fold_end ~= -1 then
+            lnum = fold_end + 1
+        else
+            local line = vim.api.nvim_buf_get_lines(bufId, lnum-1, lnum, true)[1]
+            local chars = vim.fn.split(line, '\\zs\\ze')
+
+            local col = 1
+            for i, cur in ipairs(chars) do -- search beyond last column
+                if prematch(chars, i) and test_func(chars, i) then
+                    table.insert(targets, { char = cur, pos = { lnum, col } })
+                end
+                col = col + string.len(cur)
+            end
+            assert(string.len(line) == col - 1)
+
+            lnum = lnum + 1
+        end
+    end
+    return targets
+end
+
+--[[
+    -- Sort them by vertical screen distance from cursor.
+    local cur_screen_row = vim.fn.screenpos(winid, cursor_line, 1)["row"]
+    local function screen_rows_from_cur(t)
+        local t_screen_row = vim.fn.screenpos(winid, t.pos[1], t.pos[2])["row"]
+        return math.abs(cur_screen_row - t_screen_row)
+    end
+    table.sort(targets, function(t1, t2)
+        return screen_rows_from_cur(t1) < screen_rows_from_cur(t2)
+    end)
+    if #targets >= 1 then
+        return targets
+]]
+
+local ns = vim.api.nvim_create_namespace('Easyword')
+
+vim.api.nvim_set_hl(0, 'EasywordBackdrop', { link = 'Comment' })
+vim.api.nvim_set_hl(0, 'EasywordTypedChar', { sp='red', underline=true, bold = true })
+vim.api.nvim_set_hl(0, 'EasywordRestChar', { bg = 'black', fg = 'grey', bold = true })
+vim.api.nvim_set_hl(0, 'EasywordTypedLabel', { sp='red', underline=true, bold = true })
+vim.api.nvim_set_hl(0, 'EasywordRestLabel', { bg = 'black', fg = 'white', bold = true })
+
+local labels = {
+    's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o', "'",
+    'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
+    --[['S', 'J', 'K', 'D', 'L', 'F', 'C', 'N', 'I', 'E', 'W', 'R', 'O', '"',
+    "H", "M", "U", "Y", "V", "G", "T", "A", "Q", "P", "X", "Z", "?",]]
+}
+
+--[[local function computeLabelStep(cache, step)
+    if cache[step] then return cache[step]
+    elseif step == 1 then
+        cache[1] = labels
+        return cache[1]
+    elseif not (step >= 1) then error() end
+
+    local count = #labels
+    local prev = computeLabelStep(cache, step - 1)
+    local new = {}
+    for i = 1, #prev do
+        table.insert(new, labels[1 + (i-1) % count]..prev[i])
+    end
+    for i = 1, count-1 do
+        for j = 1, count do
+            local prevI = i
+            if j <= i then prevI = 1 + (prevI-1 + 1) % count end
+            table.insert(new, labels[j]..prev[prevI])
+        end
+    end
+
+    cache[step] = new
+    return new
+end]]
+
+--local function computeLabels(cache, max)
+--    local count = #labels
+--    local len = 1 + math.ceil((max - count) / (count*count - count))
+--    return computeLabelStep(cache, len)
+--end
+
+local function updList(table, update)
+    for i, v in ipairs(update) do
+        table[i] = v
+    end
+    return table
+end
+
+local function computeLabels(cache, max)
+    if #cache == 0 then updList(cache, labels) end
+
+    local startI = 1
+    local lastI = #labels
+    while lastI - startI + 1 < max do
+        local sl = cache[startI]
+        local sst = sl:sub(1, 1)
+        local sen = sl:sub(#sl, #sl)
+        if sst == sen then
+            lastI = lastI + #labels
+            if #cache < lastI then
+                table.insert(cache, sl..sst)
+                for i = 1, #labels do
+                    if labels[i] ~= sst then
+                        table.insert(cache, sl..labels[i])
+                    end
+                end
+            end
+        else
+            lastI = lastI + 2
+            if #cache < lastI then
+                table.insert(cache, sl..sst)
+                table.insert(cache, sl..sen)
+            end
+        end
+        startI = startI + 1
+    end
+
+    return startI-1, cache
+end
+
+local function jumpToWord()
+    local winid = vim.api.nvim_get_current_win()
+    local bufId = vim.api.nvim_win_get_buf(winid)
+    local lastLine = vim.api.nvim_buf_line_count(bufId) - 1
+    local targets = get_targets(
+        winid,
+        test_split_identifiers,
+        function(chars, i)
+            return test(chars[i], matches.word)
+        end
+    )
+
+    local targetsByChar = {}
+
+    for _, target in ipairs(targets) do
+        local inserted = false
+        local match = '\\v[[='..target.char..'=]]\\c'
+        for char, data in pairs(targetsByChar) do
+            if test(char, match) then
+                inserted = true
+                table.insert(data, target)
+            end
+        end
+        if not inserted then
+            targetsByChar[target.char] = { target }
+        end
+    end
+
+    vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
+
+    local labelsCache = {}
+
+    vim.highlight.range(bufId, ns, 'EasywordBackdrop', { 0, 0 }, { lastLine, -1 }, { })
+    for char, targets in pairs(targetsByChar) do
+        local offset, labels = computeLabels(labelsCache, #targets)
+        for i, target in ipairs(targets) do
+            target.label = labels[offset + i]
+            vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
+                virt_text = {
+                    { target.char, 'EasywordRestChar' },
+                    { target.label, 'EasywordRestLabel' },
+                },
+                virt_text_pos = 'overlay',
+                hl_mode = 'combine'
+            })
+        end
+    end
+
+    vim.cmd.redraw()
+    local char = get_input()
+    if char == nil then return end
+    local inputMatch = '\\v[[='..char..'=]]\\c'
+
+    local curTargets
+    for char, targets in pairs(targetsByChar) do
+        if test(char, inputMatch) then
+            curTargets = targets
+            break
+        end
+    end
+    if curTargets == nil then
+        curTargets = get_targets(
+            winid,
+            test_split_identifiers,
+            function(chars, i)
+                return test(chars[i], inputMatch)
+            end
+        )
+        local offset, labels = computeLabels(labelsCache, #curTargets)
+        for i, target in ipairs(curTargets) do
+            target.label = labels[offset + i]
+        end
+    end
+
+    local i = 1
+    while true do
+        if #curTargets == 0 then
+            vim.api.nvim_echo({{ 'no label', 'ErrorMsg' }}, true, {})
+            break
+        end
+        if #curTargets == 1 then
+            local label = curTargets[1]
+            vim.fn.setpos('.', { 0, label.pos[1], label.pos[2], 0 })
+            break
+        end
+
+        vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
+        vim.highlight.range(bufId, ns, 'EasywordBackdrop', { 0, 0 }, { lastLine, -1 }, { })
+        for _, target in pairs(curTargets) do
+            local typedLabel = target.label:sub(1, i-1)
+            local restLabel  = target.label:sub(i)
+            vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
+                virt_text = {
+                    { target.char, 'EasywordTypedChar' },
+                    { typedLabel, 'EasywordTypedLabel' },
+                    { restLabel, 'EasywordRestLabel' },
+                },
+                virt_text_pos = 'overlay',
+                hl_mode = 'combine'
+            })
+        end
+
+        vim.cmd.redraw()
+        char = get_input()
+        if char == nil then
+            break
+        end
+
+        local newTargets = {}
+
+        for _, target in ipairs(curTargets) do
+            if char == target.label:sub(i,i) then
+                table.insert(newTargets, target)
+            end
+        end
+
+        curTargets = newTargets
+        i = i + 1
+    end
+end
+
+local function jump()
+    pcall(jumpToWord)
+    vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
+end
+
+return { jump = jump }
