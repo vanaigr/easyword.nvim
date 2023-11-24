@@ -96,6 +96,7 @@ end
 local ns = vim.api.nvim_create_namespace('Easyword')
 
 vim.api.nvim_set_hl(0, 'EasywordBackdrop', { link = 'Comment' })
+vim.api.nvim_set_hl(0, 'EasywordUnique', { bg = 'white', fg = 'black', bold = true })
 vim.api.nvim_set_hl(0, 'EasywordTypedChar', { sp='red', underline=true, bold = true })
 vim.api.nvim_set_hl(0, 'EasywordRestChar', { bg = 'black', fg = 'grey', bold = true })
 vim.api.nvim_set_hl(0, 'EasywordTypedLabel', { sp='red', underline=true, bold = true })
@@ -212,17 +213,26 @@ local function jumpToWord()
 
     vim.highlight.range(bufId, ns, 'EasywordBackdrop', { 0, 0 }, { lastLine, -1 }, { })
     for char, targets in pairs(targetsByChar) do
-        local offset, labels = computeLabels(labelsCache, #targets)
-        for i, target in ipairs(targets) do
-            target.label = labels[offset + i]
+        if #targets == 1 then
+            local target = targets[1]
             vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
-                virt_text = {
-                    { target.char, 'EasywordRestChar' },
-                    { target.label, 'EasywordRestLabel' },
-                },
+                virt_text = { { target.char, 'EasywordUnique' } },
                 virt_text_pos = 'overlay',
                 hl_mode = 'combine'
             })
+        else
+            local offset, labels = computeLabels(labelsCache, #targets)
+            for i, target in ipairs(targets) do
+                target.label = labels[offset + i]
+                vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
+                    virt_text = {
+                        { target.char, 'EasywordRestChar' },
+                        { target.label, 'EasywordRestLabel' },
+                    },
+                    virt_text_pos = 'overlay',
+                    hl_mode = 'combine'
+                })
+            end
         end
     end
 
