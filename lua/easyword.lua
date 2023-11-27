@@ -102,43 +102,10 @@ vim.api.nvim_set_hl(0, 'EasywordRestChar', { bg = 'black', fg = 'grey', bold = t
 vim.api.nvim_set_hl(0, 'EasywordTypedLabel', { sp='red', underline=true, bold = true })
 vim.api.nvim_set_hl(0, 'EasywordRestLabel', { bg = 'black', fg = 'white', bold = true })
 
-local labels = {
+local jumpLabels = {
     's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o', "'",
     'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
-    --[['S', 'J', 'K', 'D', 'L', 'F', 'C', 'N', 'I', 'E', 'W', 'R', 'O', '"',
-    "H", "M", "U", "Y", "V", "G", "T", "A", "Q", "P", "X", "Z", "?",]]
 }
-
---[[local function computeLabelStep(cache, step)
-    if cache[step] then return cache[step]
-    elseif step == 1 then
-        cache[1] = labels
-        return cache[1]
-    elseif not (step >= 1) then error() end
-
-    local count = #labels
-    local prev = computeLabelStep(cache, step - 1)
-    local new = {}
-    for i = 1, #prev do
-        table.insert(new, labels[1 + (i-1) % count]..prev[i])
-    end
-    for i = 1, count-1 do
-        for j = 1, count do
-            local prevI = i
-            if j <= i then prevI = 1 + (prevI-1 + 1) % count end
-            table.insert(new, labels[j]..prev[prevI])
-        end
-    end
-
-    cache[step] = new
-    return new
-end]]
-
---local function computeLabels(cache, max)
---    local count = #labels
---    local len = 1 + math.ceil((max - count) / (count*count - count))
---    return computeLabelStep(cache, len)
---end
 
 local function updList(table, update)
     for i, v in ipairs(update) do
@@ -147,72 +114,58 @@ local function updList(table, update)
     return table
 end
 
-local function computeLabels(cache, max)
-    if #cache == 0 then updList(cache, labels) end
+--genetate variable length labels that use at most 2 characters without aba, only aab
+local function computeLabels(max)
+    local list = updList({}, jumpLabels)
 
-    local startI = 1
-    local lastI = #labels
-    while lastI - startI + 1 < max do
-        local sl = cache[startI]
+    local curI = 1
+    while #list < max do
+        local sl = list[curI]
         local sst = sl:sub(1, 1)
         local sen = sl:sub(#sl, #sl)
         if sst == sen then
-            lastI = lastI + #labels
-            if #cache < lastI then
-                table.insert(cache, sl..sst)
-                for i = 1, #labels do
-                    if labels[i] ~= sst then
-                        table.insert(cache, sl..labels[i])
-                    end
+            table.remove(list, curI)
+            table.insert(list, sl..sst)
+            for i = 1, #jumpLabels do
+                if jumpLabels[i] ~= sst then
+                    table.insert(list, sl..jumpLabels[i])
                 end
             end
         else
-            lastI = lastI + 2
-            if #cache < lastI then
-                table.insert(cache, sl..sst)
-                table.insert(cache, sl..sen)
-            end
+            curI = curI + 1
         end
-        startI = startI + 1
     end
 
-    return startI-1, cache
+    return list
 end
 
 local function jumpToWord()
     local winid = vim.api.nvim_get_current_win()
     local bufId = vim.api.nvim_win_get_buf(winid)
     local lastLine = vim.api.nvim_buf_line_count(bufId) - 1
-    local targets = get_targets(
-        winid,
-        test_split_identifiers,
-        function(chars, i)
-            return test(chars[i], matches.word)
-        end
+
+    local wordStartTargets = get_targets(
+        winid, test_split_identifiers,
+        function(chars, i) return test(chars[i], matches.word) end
     )
 
-    local targetsByChar = {}
-
-    for _, target in ipairs(targets) do
+    local wordStartTargetsByChar = {}
+    for _, target in ipairs(wordStartTargets) do
         local inserted = false
         local match = '\\v[[='..target.char..'=]]\\c'
-        for char, data in pairs(targetsByChar) do
+        for char, data in pairs(wordStartTargetsByChar) do
             if test(char, match) then
                 inserted = true
                 table.insert(data, target)
             end
         end
-        if not inserted then
-            targetsByChar[target.char] = { target }
-        end
+        if not inserted then wordStartTargetsByChar[target.char] = { target } end
     end
 
     vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
 
-    local labelsCache = {}
-
     vim.highlight.range(bufId, ns, 'EasywordBackdrop', { 0, 0 }, { lastLine, -1 }, { })
-    for char, targets in pairs(targetsByChar) do
+    for _, targets in pairs(wordStartTargetsByChar) do
         if #targets == 1 then
             local target = targets[1]
             vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
@@ -221,9 +174,9 @@ local function jumpToWord()
                 hl_mode = 'combine'
             })
         else
-            local offset, labels = computeLabels(labelsCache, #targets)
+            local labels = computeLabels(#targets)
             for i, target in ipairs(targets) do
-                target.label = labels[offset + i]
+                target.label = labels[i]
                 vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
                     virt_text = {
                         { target.char, 'EasywordRestChar' },
@@ -242,7 +195,7 @@ local function jumpToWord()
     local inputMatch = '\\v[[='..char..'=]]\\c'
 
     local curTargets
-    for char, targets in pairs(targetsByChar) do
+    for char, targets in pairs(wordStartTargetsByChar) do
         if test(char, inputMatch) then
             curTargets = targets
             break
@@ -256,9 +209,9 @@ local function jumpToWord()
                 return test(chars[i], inputMatch)
             end
         )
-        local offset, labels = computeLabels(labelsCache, #curTargets)
+        local labels = computeLabels(#curTargets)
         for i, target in ipairs(curTargets) do
-            target.label = labels[offset + i]
+            target.label = labels[i]
         end
     end
 
