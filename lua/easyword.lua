@@ -1,5 +1,8 @@
 local api = vim.api
 
+-- code is taken from https://github.com/VanaIgr/leap-by-word.nvim.git
+-- (fork from https://github.com/Sleepful/leap-by-word.nvim)
+
 local function replace_keycodes(s)
     return api.nvim_replace_termcodes(s, true, false, true)
 end
@@ -10,7 +13,6 @@ local function get_input()
     if ok and ch ~= esc then return ch
     else return nil end
 end
-
 
 -- patterns and functions for testing if a character should be considered a target
 local matches = {
@@ -79,20 +81,6 @@ local function get_targets(winid, test_func, prematch)
     return targets
 end
 
---[[
-    -- Sort them by vertical screen distance from cursor.
-    local cur_screen_row = vim.fn.screenpos(winid, cursor_line, 1)["row"]
-    local function screen_rows_from_cur(t)
-        local t_screen_row = vim.fn.screenpos(winid, t.pos[1], t.pos[2])["row"]
-        return math.abs(cur_screen_row - t_screen_row)
-    end
-    table.sort(targets, function(t1, t2)
-        return screen_rows_from_cur(t1) < screen_rows_from_cur(t2)
-    end)
-    if #targets >= 1 then
-        return targets
-]]
-
 local ns = vim.api.nvim_create_namespace('Easyword')
 
 vim.api.nvim_set_hl(0, 'EasywordBackdrop', { link = 'Comment' })
@@ -139,6 +127,16 @@ local function computeLabels(max)
     return list
 end
 
+local function sortLabels(winId, cursor_screen_row, targets)
+    local function screen_rows_from_cur(t)
+        local t_screen_row = vim.fn.screenpos(winId, t.pos[1], t.pos[2])["row"]
+        return math.abs(cursor_screen_row - t_screen_row)
+    end
+    table.sort(targets, function(t1, t2)
+        return screen_rows_from_cur(t1) < screen_rows_from_cur(t2)
+    end)
+end
+
 local function jumpToWord()
     local winid = vim.api.nvim_get_current_win()
     local bufId = vim.api.nvim_win_get_buf(winid)
@@ -162,6 +160,9 @@ local function jumpToWord()
         if not inserted then wordStartTargetsByChar[target.char] = { target } end
     end
 
+    local cursorPos = vim.fn.getpos('.')
+    local cursorScreenRow = vim.fn.screenpos(winid, cursorPos[2], cursorPos[3])["row"]
+
     vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
 
     vim.highlight.range(bufId, ns, 'EasywordBackdrop', { 0, 0 }, { lastLine, -1 }, { })
@@ -174,6 +175,7 @@ local function jumpToWord()
                 hl_mode = 'combine'
             })
         else
+            sortLabels(winid, cursorScreenRow, targets)
             local labels = computeLabels(#targets)
             for i, target in ipairs(targets) do
                 target.label = labels[i]
@@ -202,6 +204,7 @@ local function jumpToWord()
         end
     end
     if curTargets == nil then
+        sortLabels(winid, cursorScreenRow, curTargets)
         curTargets = get_targets(
             winid,
             test_split_identifiers,
