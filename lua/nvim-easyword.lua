@@ -50,7 +50,7 @@ local function test_split_identifiers(chars, cur_i)
     return is_match
 end
 
-local function get_targets(winid, test_func, prematch)
+local function get_targets(winid, test_func)
     local wininfo = vim.fn.getwininfo(winid)[1]
     local bufId = vim.api.nvim_win_get_buf(winid)
     local lnum = wininfo.topline
@@ -68,7 +68,7 @@ local function get_targets(winid, test_func, prematch)
 
             local col = 1
             for i, cur in ipairs(chars) do -- search beyond last column
-                if prematch(chars, i) and test_func(chars, i) then
+                if test_func(chars, i) then
                     table.insert(targets, { char = cur, pos = { lnum, col } })
                 end
                 col = col + string.len(cur)
@@ -143,8 +143,9 @@ local function jumpToWord()
     local lastLine = vim.api.nvim_buf_line_count(bufId) - 1
 
     local wordStartTargets = get_targets(
-        winid, test_split_identifiers,
-        function(chars, i) return test(chars[i], matches.word) end
+        winid, function(chars, i)
+            return test(chars[i], matches.word) and test_split_identifiers(chars, i)
+        end
     )
 
     local wordStartTargetsByChar = {}
@@ -204,14 +205,15 @@ local function jumpToWord()
         end
     end
     if curTargets == nil then
-        sortLabels(winid, cursorScreenRow, curTargets)
         curTargets = get_targets(
             winid,
-            test_split_identifiers,
             function(chars, i)
-                return test(chars[i], inputMatch)
+                local t1 = test(chars[i], inputMatch)
+                local t2 = test_split_identifiers(chars, i)
+                return t1 and t2
             end
         )
+        sortLabels(winid, cursorScreenRow, curTargets)
         local labels = computeLabels(#curTargets)
         for i, target in ipairs(curTargets) do
             target.label = labels[i]
@@ -248,9 +250,7 @@ local function jumpToWord()
 
         vim.cmd.redraw()
         char = get_input()
-        if char == nil then
-            break
-        end
+        if char == nil then break end
 
         local newTargets = {}
 
@@ -266,7 +266,8 @@ local function jumpToWord()
 end
 
 local function jump()
-    pcall(jumpToWord)
+    local ok, result = pcall(jumpToWord)
+    if not ok then vim.api.nvim_echo({{'Error: '..vim.inspect(result), 'ErrorMsg'}}, true, {}) end
     vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
 end
 
