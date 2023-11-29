@@ -83,22 +83,38 @@ end
 
 local ns = vim.api.nvim_create_namespace('Easyword')
 
-vim.api.nvim_set_hl(0, 'EasywordBackdrop', { link = 'Comment' })
-vim.api.nvim_set_hl(0, 'EasywordUnique', { bg = 'white', fg = 'black', bold = true })
-vim.api.nvim_set_hl(0, 'EasywordTypedChar', { sp='red', underline=true, bold = true })
-vim.api.nvim_set_hl(0, 'EasywordRestChar', { bg = 'black', fg = 'grey', bold = true })
-vim.api.nvim_set_hl(0, 'EasywordTypedLabel', { sp='red', underline=true, bold = true })
-vim.api.nvim_set_hl(0, 'EasywordRestLabel', { bg = 'black', fg = 'white', bold = true })
+local hl = {
+    backdrop = 'EasywordBackdrop',
+    unique = 'EasywordUnique',
+    typedChar = 'EasywordTypedChar',
+    restChar = 'EasywordRestChar',
+    typedLabel = 'EasywordTypedLabel',
+    restLabel = 'EasywordRestLabel',
+}
+
+local function applyDefaultHighlight()
+    vim.api.nvim_set_hl(0, hl.backdrop, { link = 'Comment' })
+    vim.api.nvim_set_hl(0, hl.unique, { bg = 'white', fg = 'black', bold = true })
+    vim.api.nvim_set_hl(0, hl.typedChar, { sp='red', underline=true, bold = true })
+    vim.api.nvim_set_hl(0, hl.restChar, { bg = 'black', fg = 'grey', bold = true })
+    vim.api.nvim_set_hl(0, hl.typedLabel, { sp='red', underline=true, bold = true })
+    vim.api.nvim_set_hl(0, hl.restLabel, { bg = 'black', fg = 'white', bold = true })
+end
 
 local jumpLabels = {
+    
     's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o', "'",
     'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
+    
 }
+
 
 local function updList(table, update)
     for i, v in ipairs(update) do
+        
         table[i] = v
     end
+    
     return table
 end
 
@@ -166,12 +182,12 @@ local function jumpToWord()
 
     vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
 
-    vim.highlight.range(bufId, ns, 'EasywordBackdrop', { 0, 0 }, { lastLine, -1 }, { })
+    vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { lastLine, -1 }, { })
     for _, targets in pairs(wordStartTargetsByChar) do
         if #targets == 1 then
             local target = targets[1]
             vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
-                virt_text = { { target.char, 'EasywordUnique' } },
+                virt_text = { { target.char, hl.unique } },
                 virt_text_pos = 'overlay',
                 hl_mode = 'combine'
             })
@@ -182,8 +198,8 @@ local function jumpToWord()
                 target.label = labels[i]
                 vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
                     virt_text = {
-                        { target.char, 'EasywordRestChar' },
-                        { target.label, 'EasywordRestLabel' },
+                        { target.char, hl.restChar },
+                        { target.label, hl.restLabel },
                     },
                     virt_text_pos = 'overlay',
                     hl_mode = 'combine'
@@ -233,15 +249,15 @@ local function jumpToWord()
         end
 
         vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
-        vim.highlight.range(bufId, ns, 'EasywordBackdrop', { 0, 0 }, { lastLine, -1 }, { })
+        vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { lastLine, -1 }, { })
         for _, target in pairs(curTargets) do
             local typedLabel = target.label:sub(1, i-1)
             local restLabel  = target.label:sub(i)
             vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
                 virt_text = {
-                    { target.char, 'EasywordTypedChar' },
-                    { typedLabel, 'EasywordTypedLabel' },
-                    { restLabel, 'EasywordRestLabel' },
+                    { target.char, hl.typedChar },
+                    { typedLabel, hl.typedLabel },
+                    { restLabel, hl.restLabel },
                 },
                 virt_text_pos = 'overlay',
                 hl_mode = 'combine'
@@ -271,4 +287,6 @@ local function jump()
     vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
 end
 
-return { jump = jump }
+applyDefaultHighlight()
+
+return { highligh = hl, apply_default_highlight = applyDefaultHighlight, jump = jump }
