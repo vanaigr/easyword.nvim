@@ -21,9 +21,15 @@ local matches = {
     digit = [=[\v[[:digit:]]\C]=],
     word  = [=[\v[[:upper:][:lower:][:digit:]]\C]=],
 }
+
+local test_cache -- :/   twice as slow otherwise
 local function test(char, match)
-    if char == nil then return false -- vim.fn.match returns false for nil char, but not if pattern contains `[:lower:]`
-    else return vim.fn.match(char, match) == 0 end
+    if char == nil then return false end -- vim.fn.match returns false for nil char, but not if pattern contains `[:lower:]`
+    local key = char..match
+    local value = test_cache[key]
+    if value == nil then value = vim.fn.match(char, match) == 0 end
+    test_cache[key] = value
+    return value
 end
 
 local function test_split_identifiers(chars, cur_i)
@@ -102,19 +108,13 @@ local function applyDefaultHighlight()
 end
 
 local jumpLabels = {
-    
     's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o', "'",
     'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
-    
 }
 
 
 local function updList(table, update)
-    for i, v in ipairs(update) do
-        
-        table[i] = v
-    end
-    
+    for i, v in ipairs(update) do table[i] = v end
     return table
 end
 
@@ -144,19 +144,48 @@ local function computeLabels(max)
 end
 
 local function sortLabels(winId, cursor_screen_row, targets)
-    local function screen_rows_from_cur(t)
-        local t_screen_row = vim.fn.screenpos(winId, t.pos[1], t.pos[2])["row"]
-        return math.abs(cursor_screen_row - t_screen_row)
+    for _, t in ipairs(targets) do
+        local pos = vim.fn.screenpos(winId, t.pos[1], t.pos[2]) -- very slow
+
+        if pos.row > 0 and pos.col > 0 then
+            t.screen_line_diff = math.abs(cursor_screen_row - pos.row)
+        else
+            t.screen_line_diff = math.huge
+        end
     end
-    table.sort(targets, function(t1, t2)
-        return screen_rows_from_cur(t1) < screen_rows_from_cur(t2)
-    end)
+    table.sort(targets, function(t1, t2) return t1.screen_line_diff < t2.screen_line_diff end)
+end
+
+local Timer = {}
+Timer.__index = Timer
+function Timer:add(name)
+    table.insert(self, { os.clock(), name })
+end
+function Timer:new()
+    local o = {}
+    setmetatable(o, Timer)
+    return o
+end
+function Timer:print()
+    local prev
+    for _, data in ipairs(self) do
+        if prev then
+            print(data[2], vim.fn.round((data[1] - prev[1]) * 100000)/100)
+        end
+        prev = data
+    end
+
 end
 
 local function jumpToWord()
+    test_cache = {}
+
     local winid = vim.api.nvim_get_current_win()
     local bufId = vim.api.nvim_win_get_buf(winid)
     local lastLine = vim.api.nvim_buf_line_count(bufId) - 1
+
+    local cursorPos = vim.fn.getpos('.')
+    local cursorScreenRow = vim.fn.screenpos(winid, cursorPos[2], cursorPos[3])["row"]
 
     local wordStartTargets = get_targets(
         winid, function(chars, i)
@@ -164,25 +193,32 @@ local function jumpToWord()
         end
     )
 
+    test_cache = {}
+
     local wordStartTargetsByChar = {}
     for _, target in ipairs(wordStartTargets) do
-        local inserted = false
-        local match = '\\v[[='..target.char..'=]]\\c'
-        for char, data in pairs(wordStartTargetsByChar) do
-            if test(char, match) then
-                inserted = true
-                table.insert(data, target)
+        local curData
+        if wordStartTargetsByChar[target.char] then
+            curData = wordStartTargetsByChar[target.char]
+        else
+            local match = '\\v[[='..target.char..'=]]\\c'
+            for char, data in pairs(wordStartTargetsByChar) do
+                if test(char, match) then
+                    curData = data
+                    break
+                end
             end
         end
-        if not inserted then wordStartTargetsByChar[target.char] = { target } end
+        if not curData then
+            curData = {}
+            wordStartTargetsByChar[target.char] = curData
+        end
+        table.insert(curData, target)
     end
 
-    local cursorPos = vim.fn.getpos('.')
-    local cursorScreenRow = vim.fn.screenpos(winid, cursorPos[2], cursorPos[3])["row"]
-
     vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
-
     vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { lastLine, -1 }, { })
+
     for _, targets in pairs(wordStartTargetsByChar) do
         if #targets == 1 then
             local target = targets[1]
@@ -231,9 +267,7 @@ local function jumpToWord()
         )
         sortLabels(winid, cursorScreenRow, curTargets)
         local labels = computeLabels(#curTargets)
-        for i, target in ipairs(curTargets) do
-            target.label = labels[i]
-        end
+        for i, target in ipairs(curTargets) do target.label = labels[i] end
     end
 
     local i = 1
@@ -250,6 +284,7 @@ local function jumpToWord()
 
         vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
         vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { lastLine, -1 }, { })
+
         for _, target in pairs(curTargets) do
             local typedLabel = target.label:sub(1, i-1)
             local restLabel  = target.label:sub(i)
