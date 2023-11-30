@@ -1,4 +1,5 @@
 local vim = vim
+local unpack = table.unpack or unpack
 
 -- code is taken from https://github.com/VanaIgr/leap-by-word.nvim.git
 -- (fork from https://github.com/Sleepful/leap-by-word.nvim)
@@ -123,22 +124,32 @@ local function updList(table, update)
     return table
 end
 
---genetate variable length labels that use at most 2 characters without aba, only aab
+--genetate variable length labels that use at most 2 characters without aaba, only aaab
 local function computeLabels(labels, max)
-    local list = updList({}, labels)
+    local list = {}
+    for _, label in ipairs(labels) do table.insert(list, { label }) end
 
     local curI = 1
     while #list < max do
         local sl = list[curI]
-        local sst = sl:sub(1, 1)
-        local sen = sl:sub(#sl, #sl)
+        local sst = sl[1]
+        local sen = sl[#sl]
         if sst == sen then
-            table.remove(list, curI)
-            table.insert(list, sl..sst)
-            for i = 1, #labels do
-                if labels[i] ~= sst then
-                    table.insert(list, sl..labels[i])
+            local i = 1
+            while i <= #labels do
+                if labels[i] == sst then break end
+                i = i + 1
+            end
+            if i < #labels then
+                table.remove(list, curI)
+                while i <= #labels do
+                    local newLabel = { unpack(sl) }
+                    table.insert(newLabel, labels[i])
+                    table.insert(list, newLabel)
+                    i = i + 1
                 end
+            else
+                curI = curI + 1
             end
         else
             curI = curI + 1
@@ -146,6 +157,10 @@ local function computeLabels(labels, max)
     end
 
     return list
+end
+
+local function labelString(label)
+    return table.concat(label, '')
 end
 
 local function sortLabels(winId, cursor_screen_row, targets)
@@ -238,10 +253,11 @@ local function jumpToWord(options)
             local labels = computeLabels(options.labels, #targets)
             for i, target in ipairs(targets) do
                 target.label = labels[i]
+                target.typedLabel = {}
                 vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
                     virt_text = {
                         { target.char, hl.rest_char },
-                        { target.label, hl.rest_label },
+                        { labelString(target.label), hl.rest_label },
                     },
                     virt_text_pos = 'overlay',
                     hl_mode = 'combine'
@@ -271,9 +287,14 @@ local function jumpToWord(options)
                 return t1 and t2
             end
         )
-        sortLabels(winid, cursorScreenRow, curTargets)
-        local labels = computeLabels(options.labels, #curTargets)
-        for i, target in ipairs(curTargets) do target.label = labels[i] end
+        if #curTargets > 1 then
+            sortLabels(winid, cursorScreenRow, curTargets)
+            local labels = computeLabels(options.labels, #curTargets)
+            for i, target in ipairs(curTargets) do
+                target.label = labels[i]
+                target.typedLabel = {}
+            end
+        end
     end
 
     local i = 1
@@ -292,13 +313,11 @@ local function jumpToWord(options)
         vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { lastLine, -1 }, { })
 
         for _, target in pairs(curTargets) do
-            local typedLabel = target.label:sub(1, i-1)
-            local restLabel  = target.label:sub(i)
             vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
                 virt_text = {
                     { target.char, hl.typed_char },
-                    { typedLabel, hl.typed_label },
-                    { restLabel, hl.rest_label },
+                    { labelString(target.typedLabel), hl.typed_label },
+                    { labelString(target.label), hl.rest_label },
                 },
                 virt_text_pos = 'overlay',
                 hl_mode = 'combine'
@@ -310,12 +329,25 @@ local function jumpToWord(options)
         if char == nil then break end
 
         local newTargets = {}
+        local found
 
         for _, target in ipairs(curTargets) do
-            if char == target.label:sub(i,i) then
-                table.insert(newTargets, target)
+            for targetI, labelChar in ipairs(target.label) do
+                if char == labelChar then
+                    if #target.label == 1 then
+                        found = target
+                    else
+                        table.insert(newTargets, target)
+                        table.remove(target.label, targetI)
+                        table.insert(target.typedLabel, labelChar)
+                    end
+                    break
+                end
             end
+            if found then break end
         end
+
+        if found then newTargets = { found } end
 
         curTargets = newTargets
         i = i + 1
