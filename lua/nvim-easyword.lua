@@ -33,6 +33,14 @@ local function test(char, match)
     return value
 end
 
+local function splitByChars(str)
+    return vim.fn.split(str, '\\zs\\ze')
+end
+
+local function toBoolean(value)
+    if value then return true else return false end
+end
+
 local function test_split_identifiers(chars, cur_i)
     local cur_char = chars[cur_i]
 
@@ -71,7 +79,7 @@ local function get_targets(winid, test_func)
             lnum = fold_end + 1
         else
             local line = vim.api.nvim_buf_get_lines(bufId, lnum-1, lnum, true)[1]
-            local chars = vim.fn.split(line, '\\zs\\ze')
+            local chars = splitByChars(line)
 
             local col = 1
             for i, cur in ipairs(chars) do -- search beyond last column
@@ -89,6 +97,8 @@ local function get_targets(winid, test_func)
 end
 
 local defaultOptions = {
+    case_sensitive = false,
+    smart_case = true,
     labels = {
         's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o', "'",
         'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
@@ -208,21 +218,28 @@ local function jumpToWord(options)
     local cursorPos = vim.fn.getpos('.')
     local cursorScreenRow = vim.fn.screenpos(winid, cursorPos[2], cursorPos[3])["row"]
 
-    test_cache = {}
     local wordStartTargets = get_targets(
         winid, function(chars, i)
             return test(chars[i], matches.word) and test_split_identifiers(chars, i)
         end
     )
 
+    local caseSensitive = toBoolean(options.case_sensitive)
+    local function makeCharMatch(char)
+        if caseSensitive then
+            return '\\v[[='..char..'=]]\\C'
+        else
+            return '\\v[[='..char..'=]]\\c'
+        end
+    end
+
     local wordStartTargetsByChar = {}
-    test_cache = {}
     for _, target in ipairs(wordStartTargets) do
         local curData
         if wordStartTargetsByChar[target.char] then
             curData = wordStartTargetsByChar[target.char]
         else
-            local match = '\\v[[='..target.char..'=]]\\c'
+            local match = makeCharMatch(target.char)
             for char, data in pairs(wordStartTargetsByChar) do
                 if test(char, match) then
                     curData = data
@@ -269,13 +286,37 @@ local function jumpToWord(options)
     vim.cmd.redraw()
     local char = get_input()
     if char == nil then return end
-    local inputMatch = '\\v[[='..char..'=]]\\c'
+
+    local sensitivityChanged = false
+    if not caseSensitive and options.smart_case then
+        local upperChar = splitByChars(vim.fn.toupper(char))
+        local lowerChar = splitByChars(vim.fn.tolower(char))
+        -- if both cases can be typed, are different, and current character is uppper case
+        local newCaseSensitive = #upperChar == 1 and #lowerChar == 1
+            and upperChar[1] ~= lowerChar[1] and char == upperChar[1]
+        sensitivityChanged = newCaseSensitive ~= caseSensitive
+        caseSensitive = newCaseSensitive
+    end
+
+    local inputMatch = makeCharMatch(char)
 
     local curTargets
-    for targetsChar, targets in pairs(wordStartTargetsByChar) do
-        if test(targetsChar, inputMatch) then
-            curTargets = targets
-            break
+    if sensitivityChanged then
+        local newTargets = {}
+        for _, targets in pairs(wordStartTargetsByChar) do
+            for _, target in ipairs(targets) do
+                if test(target.char, inputMatch) then
+                    table.insert(newTargets, target)
+                end
+            end
+        end
+        if #newTargets ~= 0 then curTargets = newTargets end
+    else
+        for targetsChar, targets in pairs(wordStartTargetsByChar) do
+            if test(targetsChar, inputMatch) then
+                curTargets = targets
+                break
+            end
         end
     end
     if curTargets == nil then
@@ -356,6 +397,7 @@ end
 
 local function jump(opts)
     local options = createOptions(opts)
+    test_cache = {}
     local ok, result = pcall(jumpToWord, options)
     if not ok then vim.api.nvim_echo({{'Error: '..vim.inspect(result), 'ErrorMsg'}}, true, {}) end
     vim.api.nvim_buf_clear_namespace(0, options.namespace, 0, -1)
