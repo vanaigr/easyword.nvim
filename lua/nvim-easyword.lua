@@ -1,10 +1,10 @@
-local api = vim.api
+local vim = vim
 
 -- code is taken from https://github.com/VanaIgr/leap-by-word.nvim.git
 -- (fork from https://github.com/Sleepful/leap-by-word.nvim)
 
 local function replace_keycodes(s)
-    return api.nvim_replace_termcodes(s, true, false, true)
+    return vim.api.nvim_replace_termcodes(s, true, false, true)
 end
 
 local esc = replace_keycodes("<esc>")
@@ -87,31 +87,36 @@ local function get_targets(winid, test_func)
     return targets
 end
 
-local ns = vim.api.nvim_create_namespace('Easyword')
-
-local hl = {
-    backdrop = 'EasywordBackdrop',
-    unique = 'EasywordUnique',
-    typedChar = 'EasywordTypedChar',
-    restChar = 'EasywordRestChar',
-    typedLabel = 'EasywordTypedLabel',
-    restLabel = 'EasywordRestLabel',
+local defaultOptions = {
+    labels = {
+        's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o', "'",
+        'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
+    },
+    highlight = {
+        backdrop = 'EasywordBackdrop',
+        unique = 'EasywordUnique',
+        typed_char = 'EasywordTypedChar',
+        rest_char = 'EasywordRestChar',
+        typed_label = 'EasywordTypedLabel',
+        rest_label = 'EasywordRestLabel',
+    },
+    namespace = vim.api.nvim_create_namespace('Easyword'),
 }
 
-local function applyDefaultHighlight()
-    vim.api.nvim_set_hl(0, hl.backdrop, { link = 'Comment' })
-    vim.api.nvim_set_hl(0, hl.unique, { bg = 'white', fg = 'black', bold = true })
-    vim.api.nvim_set_hl(0, hl.typedChar, { sp='red', underline=true, bold = true })
-    vim.api.nvim_set_hl(0, hl.restChar, { bg = 'black', fg = 'grey', bold = true })
-    vim.api.nvim_set_hl(0, hl.typedLabel, { sp='red', underline=true, bold = true })
-    vim.api.nvim_set_hl(0, hl.restLabel, { bg = 'black', fg = 'white', bold = true })
+local function createOptions(opts)
+    if opts == nil then return defaultOptions
+    else return vim.tbl_deep_extend('keep', opts, defaultOptions) end
 end
 
-local jumpLabels = {
-    's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o', "'",
-    'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
-}
-
+local function applyDefaultHighlight(opts)
+    local options = createOptions(opts)
+    vim.api.nvim_set_hl(0, options.highlight.backdrop, { link = 'Comment' })
+    vim.api.nvim_set_hl(0, options.highlight.unique, { bg = 'white', fg = 'black', bold = true })
+    vim.api.nvim_set_hl(0, options.highlight.typed_char, { sp='red', underline=true, bold = true })
+    vim.api.nvim_set_hl(0, options.highlight.rest_char, { bg = 'black', fg = 'grey', bold = true })
+    vim.api.nvim_set_hl(0, options.highlight.typed_label, { sp='red', underline=true, bold = true })
+    vim.api.nvim_set_hl(0, options.highlight.rest_label, { bg = 'black', fg = 'white', bold = true })
+end
 
 local function updList(table, update)
     for i, v in ipairs(update) do table[i] = v end
@@ -119,8 +124,8 @@ local function updList(table, update)
 end
 
 --genetate variable length labels that use at most 2 characters without aba, only aab
-local function computeLabels(max)
-    local list = updList({}, jumpLabels)
+local function computeLabels(labels, max)
+    local list = updList({}, labels)
 
     local curI = 1
     while #list < max do
@@ -130,9 +135,9 @@ local function computeLabels(max)
         if sst == sen then
             table.remove(list, curI)
             table.insert(list, sl..sst)
-            for i = 1, #jumpLabels do
-                if jumpLabels[i] ~= sst then
-                    table.insert(list, sl..jumpLabels[i])
+            for i = 1, #labels do
+                if labels[i] ~= sst then
+                    table.insert(list, sl..labels[i])
                 end
             end
         else
@@ -177,8 +182,9 @@ function Timer:print()
 
 end
 
-local function jumpToWord()
-    test_cache = {}
+local function jumpToWord(options)
+    local hl = options.highlight
+    local ns = options.namespace
 
     local winid = vim.api.nvim_get_current_win()
     local bufId = vim.api.nvim_win_get_buf(winid)
@@ -187,15 +193,15 @@ local function jumpToWord()
     local cursorPos = vim.fn.getpos('.')
     local cursorScreenRow = vim.fn.screenpos(winid, cursorPos[2], cursorPos[3])["row"]
 
+    test_cache = {}
     local wordStartTargets = get_targets(
         winid, function(chars, i)
             return test(chars[i], matches.word) and test_split_identifiers(chars, i)
         end
     )
 
-    test_cache = {}
-
     local wordStartTargetsByChar = {}
+    test_cache = {}
     for _, target in ipairs(wordStartTargets) do
         local curData
         if wordStartTargetsByChar[target.char] then
@@ -229,13 +235,13 @@ local function jumpToWord()
             })
         else
             sortLabels(winid, cursorScreenRow, targets)
-            local labels = computeLabels(#targets)
+            local labels = computeLabels(options.labels, #targets)
             for i, target in ipairs(targets) do
                 target.label = labels[i]
                 vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
                     virt_text = {
-                        { target.char, hl.restChar },
-                        { target.label, hl.restLabel },
+                        { target.char, hl.rest_char },
+                        { target.label, hl.rest_label },
                     },
                     virt_text_pos = 'overlay',
                     hl_mode = 'combine'
@@ -250,8 +256,8 @@ local function jumpToWord()
     local inputMatch = '\\v[[='..char..'=]]\\c'
 
     local curTargets
-    for char, targets in pairs(wordStartTargetsByChar) do
-        if test(char, inputMatch) then
+    for targetsChar, targets in pairs(wordStartTargetsByChar) do
+        if test(targetsChar, inputMatch) then
             curTargets = targets
             break
         end
@@ -266,7 +272,7 @@ local function jumpToWord()
             end
         )
         sortLabels(winid, cursorScreenRow, curTargets)
-        local labels = computeLabels(#curTargets)
+        local labels = computeLabels(options.labels, #curTargets)
         for i, target in ipairs(curTargets) do target.label = labels[i] end
     end
 
@@ -290,9 +296,9 @@ local function jumpToWord()
             local restLabel  = target.label:sub(i)
             vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
                 virt_text = {
-                    { target.char, hl.typedChar },
-                    { typedLabel, hl.typedLabel },
-                    { restLabel, hl.restLabel },
+                    { target.char, hl.typed_char },
+                    { typedLabel, hl.typed_label },
+                    { restLabel, hl.rest_label },
                 },
                 virt_text_pos = 'overlay',
                 hl_mode = 'combine'
@@ -316,12 +322,17 @@ local function jumpToWord()
     end
 end
 
-local function jump()
-    local ok, result = pcall(jumpToWord)
+local function jump(opts)
+    local options = createOptions(opts)
+    local ok, result = pcall(jumpToWord, options)
     if not ok then vim.api.nvim_echo({{'Error: '..vim.inspect(result), 'ErrorMsg'}}, true, {}) end
-    vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
+    vim.api.nvim_buf_clear_namespace(0, options.namespace, 0, -1)
 end
 
 applyDefaultHighlight()
 
-return { highligh = hl, apply_default_highlight = applyDefaultHighlight, jump = jump }
+return {
+    options = defaultOptions,
+    apply_default_highlight = applyDefaultHighlight,
+    jump = jump,
+}
