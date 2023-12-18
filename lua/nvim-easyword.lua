@@ -346,7 +346,7 @@ local function jumpToWord(options)
         end
         if #curTargets == 1 then
             local label = curTargets[1]
-            vim.fn.setpos('.', { 0, label.pos[1], label.pos[2], 0 })
+            vim.fn.setpos('.', { 0, label.pos[1], label.pos[2], 0, label.pos[2] })
             break
         end
 
