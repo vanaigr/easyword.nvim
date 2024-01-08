@@ -134,11 +134,13 @@ local function updList(table, update)
     return table
 end
 
---genetate variable length labels that use at most 2 characters without aaba, only aaab
+--- genetate variable length labels that use at most 2 characters without aaba, only aaab
+--- order is left to right, top to bottom
 local function computeLabels(labels, max)
     local list = {}
     for _, label in ipairs(labels) do table.insert(list, { label }) end
 
+    -- TODO: ensure no infinite loop
     local curI = 1
     while #list < max do
         local sl = list[curI]
@@ -173,17 +175,156 @@ local function labelString(label)
     return table.concat(label, '')
 end
 
-local function sortLabels(winId, cursor_screen_row, targets)
-    for _, t in ipairs(targets) do
-        local pos = vim.fn.screenpos(winId, t.pos[1], t.pos[2]) -- very slow
+local function isPosBefore(pos, otherPos)
+    return pos[1] < otherPos[1] or (pos[1] == otherPos[1] and pos[2] < otherPos[2])
+end
 
-        if pos.row > 0 and pos.col > 0 then
-            t.screen_line_diff = math.abs(cursor_screen_row - pos.row)
+--- index of first target >= position
+local function findPosition(targets, position)
+    local begin = 1
+    local en = #targets + 1
+    while begin < en do
+        local m = begin + math.floor((en - begin) / 2)
+        local v = targets[m]
+        if isPosBefore(v.pos, position) then
+            begin = m + 1
         else
-            t.screen_line_diff = math.huge
+            en = m
         end
     end
-    table.sort(targets, function(t1, t2) return t1.screen_line_diff < t2.screen_line_diff end)
+    return begin
+end
+
+--- sort labels (originally left -> right, top -> bottom) relative to cursor:
+--- interleave lines with targets above and below cursor, reverse order on line for lines above.
+--- First mark will always be next after cursor, second is previous before the cursor.
+local function sortTargets(cursorPos, targets)
+    -- may be outside range
+    local nextI = findPosition(targets, cursorPos)
+    local prevI = nextI - 1
+
+    local sortedTargets = {}
+
+    local afterLineI
+    local beforeLineI
+
+    -- add first labels
+    if nextI <= #targets then
+        local curT = targets[nextI]
+        nextI = nextI + 1
+        table.insert(sortedTargets, curT)
+        afterLineI = curT.pos[1]
+    end
+
+    if prevI >= 1 then
+        local curT = targets[prevI]
+        prevI = prevI - 1
+        table.insert(sortedTargets, curT)
+        beforeLineI = curT.pos[1]
+    end
+
+    --- sort by lines
+    while true do
+        local continue = false
+        while nextI <= #targets do
+            continue = true
+            local curT = targets[nextI]
+            if curT.pos[1] == afterLineI then
+                table.insert(sortedTargets, curT)
+                nextI = nextI + 1
+            else
+                afterLineI = curT.pos[1]
+                break
+            end
+        end
+
+        while prevI >= 1 do
+            continue = true
+            local curT = targets[prevI]
+            if curT.pos[1] == beforeLineI then
+                table.insert(sortedTargets, curT)
+                prevI = prevI - 1
+            else
+                beforeLineI = curT.pos[1]
+                break
+            end
+        end
+
+        if not continue then break end
+    end
+
+    return sortedTargets
+end
+
+local function findCharKey(map, targetChar, makeCharMatch)
+    if map[targetChar] then
+        return targetChar, map[targetChar]
+    else
+        local match = makeCharMatch(targetChar)
+        for char, data in pairs(map) do
+            if test(char, match) then
+                return char, data
+            end
+        end
+    end
+end
+
+local function assignTargetLabels(targets, cursorPos, options)
+    targets = sortTargets(cursorPos, targets)
+    local filteredLabels = {}
+
+    local first = targets[1]
+    local targetStart = 1
+    if first then
+        first.typedLabel = {}
+        targetStart = 2
+
+        -- should be case insensitive comparison, but I am tired
+        -- of using vim regular expressions for everything
+        -- character would need to be escaped
+        local fChar = first.char:lower()
+
+        local fAfter = isPosBefore(cursorPos, first.pos)
+        if not fAfter or fChar == options.labels[1]:lower() then
+            if fAfter then
+                first.caseInsensitive = true
+                first.label = { fChar }
+            else
+                first.label = { options.labels[1] }
+            end
+
+            for i = 2, #options.labels do
+                table.insert(filteredLabels, options.labels[i])
+            end
+        else
+            first.label = { fChar }
+            first.caseInsensitive = true
+
+            local second = targets[2]
+            local labelStart = 1
+            if second and isPosBefore(second.pos, cursorPos) then
+                second.label = { options.labels[1] }
+                second.typedLabel = {}
+                labelStart = 2
+                targetStart = 3
+            end
+
+            for i = labelStart, #options.labels do
+                if options.labels[i]:lower() ~= fChar then
+                    table.insert(filteredLabels, options.labels[i])
+                end
+            end
+        end
+    end
+
+    local labels = computeLabels(filteredLabels, #targets - targetStart + 1)
+    for i = 1, #targets - targetStart + 1 do
+        local target = targets[targetStart + i - 1]
+        target.label = labels[i]
+        target.typedLabel = {}
+    end
+
+    return targets
 end
 
 local Timer = {}
@@ -216,13 +357,37 @@ local function jumpToWord(options)
     local lastLine = vim.api.nvim_buf_line_count(bufId) - 1
 
     local cursorPos = vim.fn.getpos('.')
-    local cursorScreenRow = vim.fn.screenpos(winid, cursorPos[2], cursorPos[3])["row"]
+    cursorPos = { cursorPos[2], cursorPos[3] }
 
     local wordStartTargets = get_targets(
         winid, function(chars, i)
             return test(chars[i], matches.word) and test_split_identifiers(chars, i)
         end
     )
+
+    -- remove labels at cursor position
+    do
+        local startI = findPosition(wordStartTargets, cursorPos)
+        local enI = startI
+        while enI <= #wordStartTargets do
+            local t = wordStartTargets[enI]
+            if t.pos[1] == cursorPos[1] and t.pos[2] == cursorPos[2] then
+                enI = enI + 1
+            else
+                break
+            end
+        end
+
+        local count = enI - startI
+        if count ~= 0 then
+            for i = startI, #wordStartTargets - count do
+                wordStartTargets[i] = wordStartTargets[i + count]
+            end
+            for i = #wordStartTargets - count + 1, #wordStartTargets do
+                wordStartTargets[i] = nil
+            end
+        end
+    end
 
     local caseSensitive = toBoolean(options.case_sensitive)
     local function makeCharMatch(char)
@@ -235,18 +400,7 @@ local function jumpToWord(options)
 
     local wordStartTargetsByChar = {}
     for _, target in ipairs(wordStartTargets) do
-        local curData
-        if wordStartTargetsByChar[target.char] then
-            curData = wordStartTargetsByChar[target.char]
-        else
-            local match = makeCharMatch(target.char)
-            for char, data in pairs(wordStartTargetsByChar) do
-                if test(char, match) then
-                    curData = data
-                    break
-                end
-            end
-        end
+        local _, curData = findCharKey(wordStartTargetsByChar, target.char, makeCharMatch)
         if not curData then
             curData = {}
             wordStartTargetsByChar[target.char] = curData
@@ -257,7 +411,7 @@ local function jumpToWord(options)
     vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
     vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { lastLine, -1 }, { })
 
-    for _, targets in pairs(wordStartTargetsByChar) do
+    for key, targets in pairs(wordStartTargetsByChar) do
         if #targets == 1 then
             local target = targets[1]
             vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
@@ -266,11 +420,9 @@ local function jumpToWord(options)
                 hl_mode = 'combine'
             })
         else
-            sortLabels(winid, cursorScreenRow, targets)
-            local labels = computeLabels(options.labels, #targets)
-            for i, target in ipairs(targets) do
-                target.label = labels[i]
-                target.typedLabel = {}
+            targets = assignTargetLabels(targets, cursorPos, options)
+            wordStartTargetsByChar[key] = targets
+            for _, target in ipairs(targets) do
                 vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
                     virt_text = {
                         { target.char, hl.rest_char },
@@ -329,12 +481,7 @@ local function jumpToWord(options)
             end
         )
         if #curTargets > 1 then
-            sortLabels(winid, cursorScreenRow, curTargets)
-            local labels = computeLabels(options.labels, #curTargets)
-            for i, target in ipairs(curTargets) do
-                target.label = labels[i]
-                target.typedLabel = {}
-            end
+            curTargets = assignTargetLabels(curTargets, cursorPos, options)
         end
     end
 
@@ -374,7 +521,10 @@ local function jumpToWord(options)
 
         for _, target in ipairs(curTargets) do
             for targetI, labelChar in ipairs(target.label) do
-                if char == labelChar then
+                if char == labelChar or (
+                    -- case insens -> labelChar is lower
+                    target.caseInsensitive and char:lower() == labelChar
+                ) then
                     if #target.label == 1 then
                         found = target
                     else
