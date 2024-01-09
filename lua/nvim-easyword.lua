@@ -16,25 +16,72 @@ local function get_input()
 end
 
 -- patterns and functions for testing if a character should be considered a target
-local matches = {
-    upper = [=[\v[[:upper:]]\C]=],
-    lower = [=[\v[[:lower:]]\C]=],
-    digit = [=[\v[[:digit:]]\C]=],
-    word  = [=[\v[[:upper:][:lower:][:digit:]]\C]=],
+local patterns = {
+    upper = { match = [=[\v[[:upper:]]\C]=], cache = {} },
+    lower = { match = [=[\v[[:lower:]]\C]=], cache = {} },
+    digit = { match = [=[\v[[:digit:]]\C]=], cache = {} },
+    word  = { match = [=[\v[[:upper:][:lower:][:digit:]]\C]=], cache = {} },
 }
 
-local test_cache -- :/   twice as slow otherwise
-local function test(char, match)
-    if char == nil then return false end -- vim.fn.match returns false for nil char, but not if pattern contains `[:lower:]`
-    local key = char..match
-    local value = test_cache[key]
-    if value == nil then value = vim.fn.match(char, match) == 0 end
-    test_cache[key] = value
+-- Used between runs (only for ascii)
+local equivalenceCache = { {}, {} } -- case insensitive, sensitive
+
+do -- populate caches
+    for _, v in pairs(patterns) do
+        -- for some reason, vim gives 
+        -- 'E5108: Error executing lua Vim:E976: using Blob as a String'
+        -- for ANY function in vim.fn if string contains \0
+        -- we know that neigher of pattrens patch \0, so just set it before
+        v.cache[string.char(0)] = false
+
+        for i = 1, 127 do
+            local char = string.char(i)
+            v.cache[char] = vim.fn.match(char, v.match) == 0
+        end
+    end
+end
+
+Counter = 0
+
+ -- :/   twice as slow w/o cache
+local function test(char, match, matchCache)
+    -- vim.fn.match returns false for nil char, but not if pattern contains `[:lower:]`
+    if char == nil then return false end
+
+    local value = matchCache[char]
+    if value == nil then
+        Counter = Counter + 1
+        value = vim.fn.match(char, match) == 0
+        matchCache[char] = value
+    end
     return value
 end
 
 local function splitByChars(str)
-    return vim.fn.split(str, '\\zs\\ze')
+    local result = {}
+    local i = 1
+
+    -- why are regular expressions so slow
+    -- why isn't there a faster version of a function
+    -- that splits a string into characters ?????
+    while i <= #str do
+        local byte = string.byte(str, i)
+        if byte < 128 then -- ascii
+           table.insert(result, string.char(byte))
+            i = i + 1
+        else
+            break
+        end
+    end
+
+    if i <= #str then
+        local result2 = vim.fn.split(str:sub(i), '\\zs')
+        for _, v in ipairs(result2) do
+            table.insert(result, v)
+        end
+    end
+
+    return result
 end
 
 local function toBoolean(value)
@@ -46,17 +93,26 @@ local function test_split_identifiers(chars, cur_i)
 
     local is_match = false
 
-    if test(cur_char, matches.upper) then
+    local up = patterns.upper
+    local lo = patterns.lower
+    local digit = patterns.digit
+    local word = patterns.word
+
+    if test(cur_char, up.match, up.cache) then
         local prev_char = chars[cur_i - 1]
-        if not test(prev_char, matches.upper) then is_match = true
+        if not test(prev_char, up.match, up.cache) then
+            is_match = true
         else
             local next_char = chars[cur_i + 1]
-            is_match = test(next_char, matches.word) and not test(next_char, matches.upper)
+            is_match = test(next_char, lo.match, lo.cache)
+                or test(next_char, digit.match, digit.cache)
         end
-    elseif test(cur_char, matches.digit) then
-        is_match = not test(chars[cur_i - 1], matches.digit)
-    elseif test(cur_char, matches.lower) then
-        is_match = not test(chars[cur_i - 1], matches.word) or test(chars[cur_i - 1], matches.digit)
+    elseif test(cur_char, digit.match, digit.cache) then
+        is_match = not test(chars[cur_i-1], digit.match, digit.cache)
+    elseif test(cur_char, lo.match, lo.cache) then
+        local prev_char = chars[cur_i - 1]
+        is_match = test(prev_char, digit.match, digit.cache)
+            or not test(prev_char, word.match, word.cache)
     else
         local prev_char = chars[cur_i - 1]
         is_match = prev_char ~= cur_char -- matching only first character in ==, [[ and ]]
@@ -65,15 +121,11 @@ local function test_split_identifiers(chars, cur_i)
     return is_match
 end
 
-local function get_targets(winid, test_func)
-    local wininfo = vim.fn.getwininfo(winid)[1]
-    local bufId = vim.api.nvim_win_get_buf(winid)
-    local lnum = wininfo.topline
-    local botline = wininfo.botline
+local function get_targets(bufId, topLine, botLine, test_func)
+    local lnum = topLine
 
     local targets = {}
-
-    while lnum <= botline do
+    while lnum <= botLine do
         local fold_end = vim.fn.foldclosedend(lnum) -- winId?
         if fold_end ~= -1 then
             lnum = fold_end + 1
@@ -256,19 +308,6 @@ local function sortTargets(cursorPos, targets)
     return sortedTargets
 end
 
-local function findCharKey(map, targetChar, makeCharMatch)
-    if map[targetChar] then
-        return targetChar, map[targetChar]
-    else
-        local match = makeCharMatch(targetChar)
-        for char, data in pairs(map) do
-            if test(char, match) then
-                return char, data
-            end
-        end
-    end
-end
-
 local function assignTargetLabels(targets, cursorPos, options)
     targets = sortTargets(cursorPos, targets)
     local filteredLabels = {}
@@ -282,10 +321,10 @@ local function assignTargetLabels(targets, cursorPos, options)
         -- should be case insensitive comparison, but I am tired
         -- of using vim regular expressions for everything
         -- character would need to be escaped
-        local fChar = first.char:lower()
+        local fChar = vim.fn.tolower(first.char)
 
         local fAfter = isPosBefore(cursorPos, first.pos)
-        if not fAfter or fChar == options.labels[1]:lower() then
+        if not fAfter or fChar == vim.fn.tolower(options.labels[1]) then
             if fAfter then
                 first.caseInsensitive = true
                 first.label = { fChar }
@@ -310,7 +349,7 @@ local function assignTargetLabels(targets, cursorPos, options)
             end
 
             for i = labelStart, #options.labels do
-                if options.labels[i]:lower() ~= fChar then
+                if vim.fn.tolower(options.labels[i]) ~= fChar then
                     table.insert(filteredLabels, options.labels[i])
                 end
             end
@@ -330,7 +369,7 @@ end
 local Timer = {}
 Timer.__index = Timer
 function Timer:add(name)
-    table.insert(self, { os.clock(), name })
+    table.insert(self, { vim.loop.hrtime(), name })
 end
 function Timer:new()
     local o = {}
@@ -341,7 +380,7 @@ function Timer:print()
     local prev
     for _, data in ipairs(self) do
         if prev then
-            print(data[2], vim.fn.round((data[1] - prev[1]) * 100000)/100)
+            print(data[2], vim.fn.round((data[1] - prev[1]) / 1000) / 1000)
         end
         prev = data
     end
@@ -354,14 +393,18 @@ local function jumpToWord(options)
 
     local winid = vim.api.nvim_get_current_win()
     local bufId = vim.api.nvim_win_get_buf(winid)
-    local lastLine = vim.api.nvim_buf_line_count(bufId) - 1
+
+    local wininfo = vim.fn.getwininfo(winid)[1]
+    local topLine = wininfo.topline
+    local botLine = wininfo.botline
 
     local cursorPos = vim.fn.getpos('.')
     cursorPos = { cursorPos[2], cursorPos[3] }
 
     local wordStartTargets = get_targets(
-        winid, function(chars, i)
-            return test(chars[i], matches.word) and test_split_identifiers(chars, i)
+        bufId, topLine, botLine, function(chars, i)
+            return test(chars[i], patterns.word.match, patterns.word.cache)
+                and test_split_identifiers(chars, i)
         end
     )
 
@@ -398,18 +441,56 @@ local function jumpToWord(options)
         end
     end
 
+    local eqCacheGlobal = equivalenceCache[caseSensitive and 2 or 1]
+    local eqCacheLocal = {}
+    local function eqClassCache(char)
+        local cache
+
+        local byte = char:byte(1)
+        if byte < 128 then -- if ascii then it's only 1 byte
+            cache = eqCacheGlobal[byte]
+            if not cache then
+                cache = {}
+                eqCacheGlobal[byte] = cache
+            end
+        else
+            cache = eqCacheLocal[char]
+            if not cache then
+                cache = {}
+                eqCacheLocal[char] = cache
+            end
+        end
+
+        return cache
+    end
+
     local wordStartTargetsByChar = {}
     for _, target in ipairs(wordStartTargets) do
-        local _, curData = findCharKey(wordStartTargetsByChar, target.char, makeCharMatch)
+        local tChar = target.char
+
+        local curData = wordStartTargetsByChar[tChar]
+        if not curData then
+            local match = makeCharMatch(tChar)
+            local cache = eqClassCache(tChar)
+
+            for char, data in pairs(wordStartTargetsByChar) do
+                if test(char, match, cache) then
+                    curData = data
+                    break
+                end
+            end
+        end
         if not curData then
             curData = {}
-            wordStartTargetsByChar[target.char] = curData
+            wordStartTargetsByChar[tChar] = curData
         end
         table.insert(curData, target)
     end
 
     vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
-    vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { lastLine, -1 }, { })
+    -- for some reason, topLine and botLine are faster than 0 and last line
+    --vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { vim.api.nvim_buf_line_count(bufId), -1 }, { })
+    vim.highlight.range(bufId, ns, hl.backdrop, { topLine, 0 }, { botLine, -1 }, { })
 
     for key, targets in pairs(wordStartTargetsByChar) do
         if #targets == 1 then
@@ -451,13 +532,14 @@ local function jumpToWord(options)
     end
 
     local inputMatch = makeCharMatch(char)
+    local matchCache = eqClassCache(char)
 
     local curTargets
     if sensitivityChanged then
         local newTargets = {}
         for _, targets in pairs(wordStartTargetsByChar) do
             for _, target in ipairs(targets) do
-                if test(target.char, inputMatch) then
+                if test(target.char, inputMatch, matchCache) then
                     table.insert(newTargets, target)
                 end
             end
@@ -465,7 +547,7 @@ local function jumpToWord(options)
         if #newTargets ~= 0 then curTargets = newTargets end
     else
         for targetsChar, targets in pairs(wordStartTargetsByChar) do
-            if test(targetsChar, inputMatch) then
+            if test(targetsChar, inputMatch, matchCache) then
                 curTargets = targets
                 break
             end
@@ -473,11 +555,10 @@ local function jumpToWord(options)
     end
     if curTargets == nil then
         curTargets = get_targets(
-            winid,
+            bufId, topLine, botLine,
             function(chars, i)
-                local t1 = test(chars[i], inputMatch)
-                local t2 = test_split_identifiers(chars, i)
-                return t1 and t2
+                return test(chars[i], inputMatch, matchCache)
+                    and test_split_identifiers(chars, i)
             end
         )
         if #curTargets > 1 then
@@ -498,7 +579,7 @@ local function jumpToWord(options)
         end
 
         vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
-        vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { lastLine, -1 }, { })
+        vim.highlight.range(bufId, ns, hl.backdrop, { topLine, 0 }, { botLine, -1 }, { })
 
         for _, target in pairs(curTargets) do
             vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
@@ -523,7 +604,7 @@ local function jumpToWord(options)
             for targetI, labelChar in ipairs(target.label) do
                 if char == labelChar or (
                     -- case insens -> labelChar is lower
-                    target.caseInsensitive and char:lower() == labelChar
+                    target.caseInsensitive and vim.fn.tolower(char) == labelChar
                 ) then
                     if #target.label == 1 then
                         found = target
@@ -547,7 +628,6 @@ end
 
 local function jump(opts)
     local options = createOptions(opts)
-    test_cache = {}
     local ok, result = pcall(jumpToWord, options)
     if not ok then vim.api.nvim_echo({{'Error: '..vim.inspect(result), 'ErrorMsg'}}, true, {}) end
     vim.api.nvim_buf_clear_namespace(0, options.namespace, 0, -1)
