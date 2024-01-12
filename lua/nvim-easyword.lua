@@ -315,44 +315,19 @@ local function assignTargetLabels(targets, cursorPos, options)
     local first = targets[1]
     local targetStart = 1
     if first then
-        first.typedLabel = {}
         targetStart = 2
+        first.typedLabel = {}
+        first.caseInsensitive = true
+        first.label = { first.char }
 
         -- should be case insensitive comparison, but I am tired
-        -- of using vim regular expressions for everything
-        -- character would need to be escaped
+        -- of using vim regular expressions for everything.
+        -- Character would need to be escaped ...
         local fChar = vim.fn.tolower(first.char)
-
-        local fAfter = isPosBefore(cursorPos, first.pos)
-        if not fAfter or fChar == vim.fn.tolower(options.labels[1]) then
-            if fAfter then
-                first.caseInsensitive = true
-                first.label = { fChar }
-            else
-                first.label = { options.labels[1] }
-            end
-
-            for i = 2, #options.labels do
-                table.insert(filteredLabels, options.labels[i])
-            end
-        else
-            first.label = { fChar }
-            first.caseInsensitive = true
-
-            local second = targets[2]
-            local labelStart = 1
-            if second and isPosBefore(second.pos, cursorPos) then
-                second.label = { options.labels[1] }
-                second.typedLabel = {}
-                labelStart = 2
-                targetStart = 3
-            end
-
-            for i = labelStart, #options.labels do
-                if vim.fn.tolower(options.labels[i]) ~= fChar then
-                    table.insert(filteredLabels, options.labels[i])
-                end
-            end
+        for i = 1, #options.labels do
+          if vim.fn.tolower(options.labels[i]) ~= fChar then
+            table.insert(filteredLabels, options.labels[i])
+          end
         end
     end
 
@@ -634,6 +609,8 @@ local function jump(opts)
 end
 
 applyDefaultHighlight()
+
+--vim.keymap.set('n', 's', jump)
 
 return {
     options = defaultOptions,
