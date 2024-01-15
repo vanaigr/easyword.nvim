@@ -164,8 +164,8 @@ end
 local defaultOptions = {
     case_sensitive = false,
     smart_case = true,
-    labels = {
-        's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o', "'",
+    labels = { -- don't use tab here
+        's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o',
         'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
     },
     highlight = {
@@ -198,66 +198,78 @@ local function applyDefaultHighlight(opts)
 end
 
 --- genetate variable length labels that use at most 2 characters, second char is always used only once at the end
-local function computeLabels(labels, max)
-  local list = {}
-  for _, i in ipairs(labels) do table.insert(list, { i }) end
+-- returns { { repCount, repCharI, lastCharI }, ... }
+local function computeLabels(labelCharsI, max)
+  if #labelCharsI < 2 then
+    if max == 0 then return {} end
+    if #labelCharsI == 1 and max == 1 then return { 0, labelCharsI[1], labelCharsI[1] } end
+    error('could not generate ' .. max .. ' labels from ' .. #labelCharsI .. ' label variations')
+  end
 
-  local ITER_COUNT = 0 -- TODO: properly ensure no infinite loop
+  -- list of #chars in labels that have repeating label
+  local sameCharLabels = {}
+  for _, i in ipairs(labelCharsI) do table.insert(sameCharLabels, { 0, i, i }) end
+
+  local labels = {}
 
   local curI = 1
-  while #list < max do
-    ITER_COUNT = ITER_COUNT + 1
-    if ITER_COUNT > 10000 then 
-      error('#iterations for ' .. max .. ' label generation is exceeded with #list = ' .. #list)
-    end
+  while #labels + #sameCharLabels < max do
+    local curLabel = sameCharLabels[curI]
+    local labelChar = curLabel[2]
+    local curLabelLen = curLabel[1] + 1
 
-    local curLabel = list[curI]
-    if not curLabel then
-      error('could not generate ' .. max .. ' labels from ' .. labelCount .. ' labels (generted ' .. #list .. ')')
-    end
-
-    local firstChar = curLabel[1]
-    local lastChar = curLabel[#curLabel]
-    if firstChar == lastChar then
-      table.remove(list, curI)
-
-      table.insert(list, 0) -- prep space for first label
-      local firstI = #list
-
-      for _, i in ipairs(labels) do
-        if i ~= firstChar then
-          local newLabel = { unpack(curLabel) }
-          table.insert(newLabel, i)
-          table.insert(list, newLabel)
-        end
+    for _, i in ipairs(labelCharsI) do
+      if i ~= labelChar then
+        table.insert(labels, { curLabelLen, labelChar, i })
       end
+    end
 
-      -- curLabel is used before, so it is modified and reinserted here
-      -- this just saves an extra copy
-      table.insert(curLabel, firstChar)
-      list[firstI] = curLabel
-    else
+    curLabel[1] = curLabel[1] + 1
+    curI = curI + 1
+    if curI > #sameCharLabels then curI = 1 end
+  end
+
+  -- merge same char labels and regular labels
+  local addedCount = 0
+  local labelsI = 1
+  while addedCount < #sameCharLabels do
+    local sameCharLabel = sameCharLabels[curI]
+    local label = labels[labelsI]
+
+    if not label then
+      table.insert(labels, sameCharLabel)
+      addedCount = addedCount + 1
       curI = curI + 1
+      if curI > #sameCharLabels then curI = 1 end
+    else
+      if sameCharLabel[1] <= label[1] then
+        table.insert(labels, labelsI, sameCharLabel)
+        addedCount = addedCount + 1
+        curI = curI + 1
+        if curI > #sameCharLabels then curI = 1 end
+      end
+      labelsI = labelsI + 1
     end
   end
 
-  return list
+  return labels
 end
 
 local function labelString(displayLabels, label)
-    if label.literal then
+    if not label then
+      return ''
+    elseif label.literal then
       return label.literal
     else
       local s = ''
-      for _, i in ipairs(label) do
-        s = s .. displayLabels[i]
+      if label[1] > 0 then
+        s = displayLabels[label[2]]:rep(label[1])
+      end
+      if label[3] then
+        s = s .. displayLabels[label[3]]
       end
       return s
     end
-end
-
-local function isPosBefore(pos, otherPos)
-    return pos[1] < otherPos[1] or (pos[1] == otherPos[1] and pos[2] < otherPos[2])
 end
 
 --- index of first target >= position
@@ -267,7 +279,7 @@ local function findPosition(targets, position)
     while begin < en do
         local m = begin + math.floor((en - begin) / 2)
         local v = targets[m]
-        if isPosBefore(v.pos, position) then
+        if v.pos[1] < position[1] or (v.pos[1] == position[1] and v.pos[2] < position[2]) then
             begin = m + 1
         else
             en = m
@@ -346,7 +358,6 @@ local function assignTargetLabels(targets, cursorPos, labelChars, caseSensitive)
     local targetStart = 1
     if first then
         targetStart = 2
-        first.typedLabel = {}
         first.label = { literal = first.char }
 
         local charMatch = makeCharMatch(first.char, caseSensitive)
@@ -372,7 +383,7 @@ local function assignTargetLabels(targets, cursorPos, labelChars, caseSensitive)
     for i = 1, #targets - targetStart + 1 do
         local target = targets[targetStart + i - 1]
         target.label = labels[i]
-        target.typedLabel = {}
+        target.typedLabel = { 0, labels[i][2] }
     end
 
     return targets
@@ -392,6 +403,7 @@ if false then
   end
   function Timer:print()
     local prev
+    print(' ')
     for _, data in ipairs(self) do
       if prev then
         print(data[2], vim.fn.round((data[1] - prev[1]) / 1000) / 1000)
@@ -658,15 +670,16 @@ local function jumpToWord(options)
               break
             end
           else
-            local labelCharI = target.label[1]
-            if inputChar == curLabelChars[labelCharI] then
-              if #target.label == 1 then
+            if target.label[1] > 0 then
+              if inputChar == curLabelChars[target.label[2]] then
+                target.label[1] = target.label[1] - 1
+                target.typedLabel[1] = target.typedLabel[1] + 1
+                table.insert(newTargets, target)
+              end
+            else
+              if inputChar == curLabelChars[target.label[3]] then
                 found = target
                 break
-              else
-                table.remove(target.label, 1)
-                table.insert(target.typedLabel, labelCharI)
-                table.insert(newTargets, target)
               end
             end
           end
