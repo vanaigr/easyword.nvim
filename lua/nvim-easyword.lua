@@ -23,7 +23,6 @@ local patterns = {
     word  = { match = [=[\v[[:upper:][:lower:][:digit:]]\C]=], cache = {} },
 }
 
--- Used between runs (only for ascii)
 local equivalenceCache = { {}, {} } -- case insensitive, sensitive
 
 do -- populate caches
@@ -82,6 +81,24 @@ end
 
 local function toBoolean(value)
     if value then return true else return false end
+end
+
+local function makeCharMatch(char, caseSensitive)
+  if caseSensitive then 
+    return '\\v[[='..char..'=]]\\C'
+  else 
+    return '\\v[[='..char..'=]]\\c'
+  end
+end
+
+local function eqClassCache(char, caseSensitive)
+    local cacheType = equivalenceCache[caseSensitive and 2 or 1]
+    local cache = cacheType[char]
+    if not cache then
+      cache = {}
+      cacheType[char] = cache
+    end
+    return cache
 end
 
 local function test_split_identifiers(chars, cur_i)
@@ -161,6 +178,9 @@ local defaultOptions = {
     },
     namespace = vim.api.nvim_create_namespace('Easyword'),
 }
+function defaultOptions:get_typed_labels(char)
+  return self.labels -- must be same length as self.labels
+end
 
 local function createOptions(opts)
     if opts == nil then return defaultOptions
@@ -177,50 +197,63 @@ local function applyDefaultHighlight(opts)
     vim.api.nvim_set_hl(0, options.highlight.rest_label, { bg = 'black', fg = 'white', bold = true })
 end
 
-local function updList(table, update)
-    for i, v in ipairs(update) do table[i] = v end
-    return table
-end
-
---- genetate variable length labels that use at most 2 characters without aaba, only aaab
---- order is left to right, top to bottom
+--- genetate variable length labels that use at most 2 characters, second char is always used only once at the end
 local function computeLabels(labels, max)
-    local list = {}
-    for _, label in ipairs(labels) do table.insert(list, { label }) end
+  local list = {}
+  for _, i in ipairs(labels) do table.insert(list, { i }) end
 
-    -- TODO: ensure no infinite loop
-    local curI = 1
-    while #list < max do
-        local sl = list[curI]
-        local sst = sl[1]
-        local sen = sl[#sl]
-        if sst == sen then
-            local i = 1
-            while i <= #labels do
-                if labels[i] == sst then break end
-                i = i + 1
-            end
-            if i < #labels then
-                table.remove(list, curI)
-                while i <= #labels do
-                    local newLabel = { unpack(sl) }
-                    table.insert(newLabel, labels[i])
-                    table.insert(list, newLabel)
-                    i = i + 1
-                end
-            else
-                curI = curI + 1
-            end
-        else
-            curI = curI + 1
-        end
+  local ITER_COUNT = 0 -- TODO: properly ensure no infinite loop
+
+  local curI = 1
+  while #list < max do
+    ITER_COUNT = ITER_COUNT + 1
+    if ITER_COUNT > 10000 then 
+      error('#iterations for ' .. max .. ' label generation is exceeded with #list = ' .. #list)
     end
 
-    return list
+    local curLabel = list[curI]
+    if not curLabel then
+      error('could not generate ' .. max .. ' labels from ' .. labelCount .. ' labels (generted ' .. #list .. ')')
+    end
+
+    local firstChar = curLabel[1]
+    local lastChar = curLabel[#curLabel]
+    if firstChar == lastChar then
+      table.remove(list, curI)
+
+      table.insert(list, 0) -- prep space for first label
+      local firstI = #list
+
+      for _, i in ipairs(labels) do
+        if i ~= firstChar then
+          local newLabel = { unpack(curLabel) }
+          table.insert(newLabel, i)
+          table.insert(list, newLabel)
+        end
+      end
+
+      -- curLabel is used before, so it is modified and reinserted here
+      -- this just saves an extra copy
+      table.insert(curLabel, firstChar)
+      list[firstI] = curLabel
+    else
+      curI = curI + 1
+    end
+  end
+
+  return list
 end
 
-local function labelString(label)
-    return table.concat(label, '')
+local function labelString(displayLabels, label)
+    if label.literal then
+      return label.literal
+    else
+      local s = ''
+      for _, i in ipairs(label) do
+        s = s .. displayLabels[i]
+      end
+      return s
+    end
 end
 
 local function isPosBefore(pos, otherPos)
@@ -304,29 +337,38 @@ local function sortTargets(cursorPos, targets)
     return sortedTargets
 end
 
-local function assignTargetLabels(targets, cursorPos, options, makeCharMatch)
+local function assignTargetLabels(targets, cursorPos, labelChars, caseSensitive)
     targets = sortTargets(cursorPos, targets)
-    local filteredLabels = {}
+    local labelCharsI = {}
 
+    -- first target is special, its labes is the key itself
     local first = targets[1]
     local targetStart = 1
     if first then
         targetStart = 2
         first.typedLabel = {}
-        first.label = { first.char }
+        first.label = { literal = first.char }
 
-        local charMatch = makeCharMatch(first.char)
-        local matchCache = {}
-        for i = 1, #options.labels do
-          if not test(options.labels[i], charMatch, matchCache) then
-            table.insert(filteredLabels, options.labels[i])
-          end
-        end
+        local charMatch = makeCharMatch(first.char, caseSensitive)
+        local matchCache = eqClassCache(first.char, caseSensitive)
         first.match = charMatch
         first.matchCache = matchCache
+
+        -- we need to remove all other label chars that that are quivalent
+        -- case sensitivity is the same as for input characters, since it gives more
+        -- available label chars if case sensitivity is turned on.
+        for i = 1, #labelChars do
+          if not test(labelChars[i], charMatch, matchCache) then
+            table.insert(labelCharsI, i)
+          end
+        end
+    else
+        for i = 1, #labelChars do
+            table.insert(labelCharsI, i)
+        end
     end
 
-    local labels = computeLabels(filteredLabels, #targets - targetStart + 1)
+    local labels = computeLabels(labelCharsI, #targets - targetStart + 1)
     for i = 1, #targets - targetStart + 1 do
         local target = targets[targetStart + i - 1]
         target.label = labels[i]
@@ -337,29 +379,44 @@ local function assignTargetLabels(targets, cursorPos, options, makeCharMatch)
 end
 
 local Timer = {}
-Timer.__index = Timer
-function Timer:add(name)
-    table.insert(self, { vim.loop.hrtime(), name })
-end
-function Timer:new()
+
+if false then
+  Timer.__index = Timer
+  function Timer:new()
     local o = {}
     setmetatable(o, Timer)
     return o
-end
-function Timer:print()
+  end
+  function Timer:add(name)
+    table.insert(self, { vim.loop.hrtime(), name })
+  end
+  function Timer:print()
     local prev
     for _, data in ipairs(self) do
-        if prev then
-            print(data[2], vim.fn.round((data[1] - prev[1]) / 1000) / 1000)
-        end
-        prev = data
+      if prev then
+        print(data[2], vim.fn.round((data[1] - prev[1]) / 1000) / 1000)
+      end
+      prev = data
     end
-
+  end
+else
+  Timer.__index = Timer
+  function Timer:new()
+    local o = {}
+    setmetatable(o, Timer)
+    return o
+  end
+  function Timer:add(name) end
+  function Timer:print() end
 end
 
 local function jumpToWord(options)
+    local timer = Timer:new()
+    timer:add('')
+
     local hl = options.highlight
     local ns = options.namespace
+    local displayLabels = options.labels
 
     local winid = vim.api.nvim_get_current_win()
     local bufId = vim.api.nvim_win_get_buf(winid)
@@ -368,9 +425,20 @@ local function jumpToWord(options)
     local topLine = wininfo.topline
     local botLine = wininfo.botline
 
+    local function clear()
+        vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
+        -- For some reason, topLine and botLine are faster than 0 and last line
+        -- vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { vim.api.nvim_buf_line_count(bufId), -1 }, { }).
+        -- Also, botline doesn't include partially shown lines. So no -1.
+        vim.highlight.range(bufId, ns, hl.backdrop, { topLine-1, 0 }, { botLine, -1 }, { })
+    end
+
     local cursorPos = vim.fn.getpos('.')
     cursorPos = { cursorPos[2], cursorPos[3] }
 
+    timer:add('prep')
+
+    -- find all word tragets 
     local wordStartTargets = get_targets(
         bufId, topLine, botLine, function(chars, i)
             return test(chars[i], patterns.word.match, patterns.word.cache)
@@ -378,7 +446,9 @@ local function jumpToWord(options)
         end
     )
 
-    -- remove labels at cursor position
+    timer:add('targets')
+
+    -- remove targets at cursor position
     do
         local startI = findPosition(wordStartTargets, cursorPos)
         local enI = startI
@@ -402,42 +472,19 @@ local function jumpToWord(options)
         end
     end
 
+    timer:add('remove dup')
+
     local caseSensitive = toBoolean(options.case_sensitive)
-    local makeCharMatch
-    if caseSensitive then makeCharMatch = function(char) return '\\v[[='..char..'=]]\\C' end
-    else makeCharMatch = function(char) return '\\v[[='..char..'=]]\\c' end end
 
-    local eqCacheGlobal = equivalenceCache[caseSensitive and 2 or 1]
-    local eqCacheLocal = {}
-    local function eqClassCache(char)
-        local cache
-
-        local byte = char:byte(1)
-        if byte < 128 then -- if ascii then it's only 1 byte
-            cache = eqCacheGlobal[byte]
-            if not cache then
-                cache = {}
-                eqCacheGlobal[byte] = cache
-            end
-        else
-            cache = eqCacheLocal[char]
-            if not cache then
-                cache = {}
-                eqCacheLocal[char] = cache
-            end
-        end
-
-        return cache
-    end
-
+    -- group targets by characters
     local wordStartTargetsByChar = {}
     for _, target in ipairs(wordStartTargets) do
         local tChar = target.char
 
         local curData = wordStartTargetsByChar[tChar]
         if not curData then
-            local match = makeCharMatch(tChar)
-            local cache = eqClassCache(tChar)
+            local match = makeCharMatch(tChar, caseSensitive)
+            local cache = eqClassCache(tChar, caseSensitive)
 
             for char, data in pairs(wordStartTargetsByChar) do
                 if test(char, match, cache) then
@@ -453,11 +500,13 @@ local function jumpToWord(options)
         table.insert(curData, target)
     end
 
-    vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
-    -- for some reason, topLine and botLine are faster than 0 and last line
-    --vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { vim.api.nvim_buf_line_count(bufId), -1 }, { })
-    vim.highlight.range(bufId, ns, hl.backdrop, { topLine, 0 }, { botLine, -1 }, { })
+    timer:add('by word')
 
+    clear()
+
+    timer:add('clear hl')
+
+    -- assign labels to groups of targets and display them
     for key, targets in pairs(wordStartTargetsByChar) do
         if #targets == 1 then
             local target = targets[1]
@@ -467,13 +516,15 @@ local function jumpToWord(options)
                 hl_mode = 'combine'
             })
         else
-            targets = assignTargetLabels(targets, cursorPos, options, makeCharMatch)
+            local labels = options:get_typed_labels(key)
+            targets = assignTargetLabels(targets, cursorPos, labels, caseSensitive)
+            targets.labelChars = labels
             wordStartTargetsByChar[key] = targets
             for _, target in ipairs(targets) do
                 vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
                     virt_text = {
                         { target.char, hl.rest_char },
-                        { labelString(target.label), hl.rest_label },
+                        { labelString(displayLabels, target.label), hl.rest_label },
                     },
                     virt_text_pos = 'overlay',
                     hl_mode = 'combine'
@@ -482,43 +533,75 @@ local function jumpToWord(options)
         end
     end
 
-    vim.cmd.redraw()
-    local char = get_input()
-    if char == nil then return end
+    timer:add('end')
 
+    timer:print()
+
+    vim.cmd.redraw()
+    local inputChar = get_input()
+    if inputChar == nil then return end
+
+    -- apply smart case
+    -- NOTE: we can only add restrictions, since we already computed 
+    -- the labels, and if we would have to join 2+ targets groups, 
+    -- the labels would collide; and label chars also wouldn't be the same 
+    -- (would break first target, which assumes other targets don't take its character)
     local sensitivityChanged = false
     if not caseSensitive and options.smart_case then
-        local upperChar = splitByChars(vim.fn.toupper(char))
-        local lowerChar = splitByChars(vim.fn.tolower(char))
-        -- if both cases can be typed, are different, and current character is uppper case
-        local newCaseSensitive = #upperChar == 1 and #lowerChar == 1
-            and upperChar[1] ~= lowerChar[1] and char == upperChar[1]
-        sensitivityChanged = newCaseSensitive ~= caseSensitive
-        caseSensitive = newCaseSensitive
+        local upperChar = splitByChars(vim.fn.toupper(inputChar))
+        local lowerChar = splitByChars(vim.fn.tolower(inputChar))
+
+        -- if both cases can be typed, are different, and current input character is uppper case
+        if #upperChar == 1 and #lowerChar == 1 and upperChar[1] ~= lowerChar[1] and inputChar == upperChar[1] then
+          sensitivityChanged = true
+          caseSensitive = true
+        end
     end
 
-    local inputMatch = makeCharMatch(char)
-    local matchCache = eqClassCache(char)
+    local inputMatch = makeCharMatch(inputChar, caseSensitive)
+    local matchCache = eqClassCache(inputChar, caseSensitive)
 
+    -- find group of targets that matches input characters
     local curTargets
+    local curLabelChars
+
     if sensitivityChanged then
+        -- sensitivityChanged => prev was case insensitive
+        local oldInputMatch = makeCharMatch(inputChar, false)
+        local oldInputCache = eqClassCache(inputChar, false)
+
+        -- find targets that would've been used and filter ones that have different case
         local newTargets = {}
-        for _, targets in pairs(wordStartTargetsByChar) do
-            for _, target in ipairs(targets) do
-                if test(target.char, inputMatch, matchCache) then
-                    table.insert(newTargets, target)
+        local newLabelChars
+        for targetsChar, targets in pairs(wordStartTargetsByChar) do
+            if test(targetsChar, oldInputMatch, oldInputCache) then
+                newLabelChars = targets.labelChars
+                for _, target in ipairs(targets) do
+                    if test(target.char, inputMatch, matchCache) then
+                        table.insert(newTargets, target)
+                    end
                 end
+                break
             end
         end
-        if #newTargets ~= 0 then curTargets = newTargets end
+
+        if #newTargets ~= 0 then
+          curTargets = newTargets
+          curLabelChars = newLabelChars
+        end
     else
         for targetsChar, targets in pairs(wordStartTargetsByChar) do
             if test(targetsChar, inputMatch, matchCache) then
                 curTargets = targets
+                curLabelChars = targets.labelChars
                 break
             end
         end
     end
+
+    -- input character is not a 'word' character, but '=' or '[', etc.
+    -- they are not displayed before the first input char because
+    -- e.g. parentheses create too much noise
     if curTargets == nil then
         curTargets = get_targets(
             bufId, topLine, botLine,
@@ -528,14 +611,17 @@ local function jumpToWord(options)
             end
         )
         if #curTargets > 1 then
-            curTargets = assignTargetLabels(curTargets, cursorPos, options, makeCharMatch)
+            local labels = options:get_typed_labels(inputChar)
+            curTargets = assignTargetLabels(curTargets, cursorPos, labels, caseSensitive)
+            curLabelChars = labels
         end
     end
 
+    -- find the terget to jump to, jump to that target
     local i = 1
     while true do
         if #curTargets == 0 then
-            vim.api.nvim_echo({{ 'no label', 'ErrorMsg' }}, true, {})
+            vim.api.nvim_echo({{ 'no target', 'ErrorMsg' }}, true, {})
             break
         end
         if #curTargets == 1 then
@@ -544,15 +630,14 @@ local function jumpToWord(options)
             break
         end
 
-        vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
-        vim.highlight.range(bufId, ns, hl.backdrop, { topLine, 0 }, { botLine, -1 }, { })
+        clear()
 
-        for _, target in pairs(curTargets) do
+        for _, target in ipairs(curTargets) do
             vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
                 virt_text = {
                     { target.char, hl.typed_char },
-                    { labelString(target.typedLabel), hl.typed_label },
-                    { labelString(target.label), hl.rest_label },
+                    { labelString(displayLabels, target.typedLabel), hl.typed_label },
+                    { labelString(displayLabels, target.label), hl.rest_label },
                 },
                 virt_text_pos = 'overlay',
                 hl_mode = 'combine'
@@ -560,31 +645,31 @@ local function jumpToWord(options)
         end
 
         vim.cmd.redraw()
-        char = get_input()
-        if char == nil then break end
+        inputChar = get_input()
+        if inputChar == nil then break end
 
         local newTargets = {}
         local found
 
-        -- case insensitive label cache
-        -- it's one object since there can only be one 
-        -- case insensitive label currently (the first one)
-        local ciCache = {}
-
         for _, target in ipairs(curTargets) do
-            for targetI, labelChar in ipairs(target.label) do
-                if char == labelChar or (target.match and test(char, target.match, target.matchCache)) then
-                    if #target.label == 1 then
-                        found = target
-                    else
-                        table.insert(newTargets, target)
-                        table.remove(target.label, targetI)
-                        table.insert(target.typedLabel, labelChar)
-                    end
-                    break
-                end
+          if target.label.literal then
+            if test(inputChar, target.match, target.matchCache) then
+              found = target
+              break
             end
-            if found then break end
+          else
+            local labelCharI = target.label[1]
+            if inputChar == curLabelChars[labelCharI] then
+              if #target.label == 1 then
+                found = target
+                break
+              else
+                table.remove(target.label, 1)
+                table.insert(target.typedLabel, labelCharI)
+                table.insert(newTargets, target)
+              end
+            end
+          end
         end
 
         if found then newTargets = { found } end
@@ -609,4 +694,5 @@ return {
     options = defaultOptions,
     apply_default_highlight = applyDefaultHighlight,
     jump = jump,
+    regexp_test = test,
 }
