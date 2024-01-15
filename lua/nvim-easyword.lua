@@ -41,16 +41,12 @@ do -- populate caches
     end
 end
 
-Counter = 0
-
- -- :/   twice as slow w/o cache
 local function test(char, match, matchCache)
     -- vim.fn.match returns false for nil char, but not if pattern contains `[:lower:]`
     if char == nil then return false end
 
     local value = matchCache[char]
     if value == nil then
-        Counter = Counter + 1
         value = vim.fn.match(char, match) == 0
         matchCache[char] = value
     end
@@ -308,7 +304,7 @@ local function sortTargets(cursorPos, targets)
     return sortedTargets
 end
 
-local function assignTargetLabels(targets, cursorPos, options)
+local function assignTargetLabels(targets, cursorPos, options, makeCharMatch)
     targets = sortTargets(cursorPos, targets)
     local filteredLabels = {}
 
@@ -317,18 +313,17 @@ local function assignTargetLabels(targets, cursorPos, options)
     if first then
         targetStart = 2
         first.typedLabel = {}
-        first.caseInsensitive = true
         first.label = { first.char }
 
-        -- should be case insensitive comparison, but I am tired
-        -- of using vim regular expressions for everything.
-        -- Character would need to be escaped ...
-        local fChar = vim.fn.tolower(first.char)
+        local charMatch = makeCharMatch(first.char)
+        local matchCache = {}
         for i = 1, #options.labels do
-          if vim.fn.tolower(options.labels[i]) ~= fChar then
+          if not test(options.labels[i], charMatch, matchCache) then
             table.insert(filteredLabels, options.labels[i])
           end
         end
+        first.match = charMatch
+        first.matchCache = matchCache
     end
 
     local labels = computeLabels(filteredLabels, #targets - targetStart + 1)
@@ -408,13 +403,9 @@ local function jumpToWord(options)
     end
 
     local caseSensitive = toBoolean(options.case_sensitive)
-    local function makeCharMatch(char)
-        if caseSensitive then
-            return '\\v[[='..char..'=]]\\C'
-        else
-            return '\\v[[='..char..'=]]\\c'
-        end
-    end
+    local makeCharMatch
+    if caseSensitive then makeCharMatch = function(char) return '\\v[[='..char..'=]]\\C' end
+    else makeCharMatch = function(char) return '\\v[[='..char..'=]]\\c' end end
 
     local eqCacheGlobal = equivalenceCache[caseSensitive and 2 or 1]
     local eqCacheLocal = {}
@@ -476,7 +467,7 @@ local function jumpToWord(options)
                 hl_mode = 'combine'
             })
         else
-            targets = assignTargetLabels(targets, cursorPos, options)
+            targets = assignTargetLabels(targets, cursorPos, options, makeCharMatch)
             wordStartTargetsByChar[key] = targets
             for _, target in ipairs(targets) do
                 vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
@@ -537,7 +528,7 @@ local function jumpToWord(options)
             end
         )
         if #curTargets > 1 then
-            curTargets = assignTargetLabels(curTargets, cursorPos, options)
+            curTargets = assignTargetLabels(curTargets, cursorPos, options, makeCharMatch)
         end
     end
 
@@ -575,12 +566,14 @@ local function jumpToWord(options)
         local newTargets = {}
         local found
 
+        -- case insensitive label cache
+        -- it's one object since there can only be one 
+        -- case insensitive label currently (the first one)
+        local ciCache = {}
+
         for _, target in ipairs(curTargets) do
             for targetI, labelChar in ipairs(target.label) do
-                if char == labelChar or (
-                    -- case insens -> labelChar is lower
-                    target.caseInsensitive and vim.fn.tolower(char) == labelChar
-                ) then
+                if char == labelChar or (target.match and test(char, target.match, target.matchCache)) then
                     if #target.label == 1 then
                         found = target
                     else
