@@ -150,6 +150,10 @@ local function get_targets(bufId, topLine, botLine, test_func)
             for i, cur in ipairs(chars) do -- search beyond last column
                 if test_func(chars, i) then
                     table.insert(targets, { char = cur, pos = { lnum, col } })
+                    -- charI is for curswant.
+                    -- The fact that curswant is 1-idexed and measured in characters 
+                    -- and not bytes or screen cells is a secret (shh, don't tell anyone)
+                    table.insert(targets, { char = cur, pos = { lnum, col, charI = i } })
                 end
                 col = col + string.len(cur)
             end
@@ -637,8 +641,8 @@ local function jumpToWord(options)
             break
         end
         if #curTargets == 1 then
-            local label = curTargets[1]
-            vim.fn.setpos('.', { 0, label.pos[1], label.pos[2], 0, label.pos[2] })
+            local pos = curTargets[1].pos
+            vim.fn.setpos('.', { 0, pos[1], pos[2], 0, pos.charI })
             break
         end
 
