@@ -71,9 +71,7 @@ local function splitByChars(str)
 
     if i <= #str then
         local result2 = vim.fn.split(str:sub(i), '\\zs')
-        for _, v in ipairs(result2) do
-            table.insert(result, v)
-        end
+        vim.list_extend(result, result2)
     end
 
     return result
@@ -134,12 +132,12 @@ local function test_split_identifiers(chars, cur_i)
     return is_match
 end
 
-local function get_targets(bufId, topLine, botLine, test_func)
+local function get_targets(bufId, topLine, botLine)
     local lnum = topLine
 
     local targets = {}
     while lnum <= botLine do
-        local fold_end = vim.fn.foldclosedend(lnum) -- winId?
+        local fold_end = vim.fn.foldclosedend(lnum)
         if fold_end ~= -1 then
             lnum = fold_end + 1
         else
@@ -147,9 +145,8 @@ local function get_targets(bufId, topLine, botLine, test_func)
             local chars = splitByChars(line)
 
             local col = 1
-            for i, cur in ipairs(chars) do -- search beyond last column
-                if test_func(chars, i) then
-                    table.insert(targets, { char = cur, pos = { lnum, col } })
+            for i, cur in ipairs(chars) do
+                if test_split_identifiers(chars, i) then
                     -- charI is for curswant.
                     -- The fact that curswant is 1-idexed and measured in characters 
                     -- and not bytes or screen cells is a secret (shh, don't tell anyone)
@@ -353,6 +350,12 @@ local function sortTargets(cursorPos, targets)
     return sortedTargets
 end
 
+local function setFirstTargetLabel(target, caseSensitive)
+    target.label = { literal = target.char }
+    target.match = makeCharMatch(target.char, caseSensitive)
+    target.matchCache = eqClassCache(target.char, caseSensitive)
+end
+
 local function assignTargetLabels(targets, cursorPos, labelChars, caseSensitive)
     targets = sortTargets(cursorPos, targets)
     local labelCharsI = {}
@@ -362,12 +365,9 @@ local function assignTargetLabels(targets, cursorPos, labelChars, caseSensitive)
     local targetStart = 1
     if first then
         targetStart = 2
-        first.label = { literal = first.char }
-
-        local charMatch = makeCharMatch(first.char, caseSensitive)
-        local matchCache = eqClassCache(first.char, caseSensitive)
-        first.match = charMatch
-        first.matchCache = matchCache
+        setFirstTargetLabel(first)
+        local charMatch = first.match
+        local matchCache = first.matchCache
 
         -- we need to remove all other label chars that that are quivalent
         -- case sensitivity is the same as for input characters, since it gives more
@@ -391,6 +391,34 @@ local function assignTargetLabels(targets, cursorPos, labelChars, caseSensitive)
     end
 
     return targets
+end
+
+-- if only the first label needs to be shown
+-- return a list with one label and all info to reconstruct
+-- normal labels later
+local function assignTargetUniqueLabels(targets, cursorPos)
+    if #targets == 0 then return targets end
+
+    -- may be outside range
+    local nextI = findPosition(targets, cursorPos)
+    local prevI = nextI - 1
+
+    -- note: might have to sort the targets later.
+    -- there is no easy way to 'resume' sorting
+    -- from after finding the first label, so we have to
+    -- rely on sorting choosing the same first target
+    -- add assignTargetLabels() to produce the same label
+    -- for it
+    local firstTarget
+    if nextI <= #targets then
+        firstTarget = targets[nextI]
+    else
+        firstTarget = targets[prevI]
+    end
+    assert(firstTarget ~= nil)
+
+    setFirstTargetLabel(firstTarget, caseSensitive)
+    return { firstTarget, orig = targets }
 end
 
 local Timer = {}
@@ -454,15 +482,14 @@ local function jumpToWord(options)
 
     timer:add('prep')
 
-    -- find all word tragets 
-    local wordStartTargets = get_targets(
-        bufId, topLine, botLine, function(chars, i)
-            return test(chars[i], patterns.word.match, patterns.word.cache)
-                and test_split_identifiers(chars, i)
-        end
-    )
-
+    -- find all tragets 
+    local wordStartTargets = get_targets(bufId, topLine, botLine)
     timer:add('targets')
+
+    if #wordStartTargets == 0 then
+        vim.api.nvim_echo({{ 'no targets', 'ErrorMsg' }}, true, {})
+        return
+    end
 
     -- remove targets at cursor position
     do
@@ -533,8 +560,16 @@ local function jumpToWord(options)
             })
         else
             local labels = options:get_typed_labels(key)
-            targets = assignTargetLabels(targets, cursorPos, labels, caseSensitive)
+            local priority
+            if test(key, patterns.word.match, patterns.word.cache) then
+              targets = assignTargetLabels(targets, cursorPos, labels, caseSensitive)
+              priority = 65535
+            else
+              targets = assignTargetUniqueLabels(targets, cursorPos)
+              priority = 65534
+            end
             targets.labelChars = labels
+            targets.priority = priority
             wordStartTargetsByChar[key] = targets
             for _, target in ipairs(targets) do
                 vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
@@ -543,7 +578,8 @@ local function jumpToWord(options)
                         { labelString(displayLabels, target.label), hl.rest_label },
                     },
                     virt_text_pos = 'overlay',
-                    hl_mode = 'combine'
+                    hl_mode = 'combine',
+                    priority = priority,
                 })
             end
         end
@@ -579,7 +615,6 @@ local function jumpToWord(options)
 
     -- find group of targets that matches input characters
     local curTargets
-    local curLabelChars
 
     if sensitivityChanged then
         -- sensitivityChanged => prev was case insensitive
@@ -588,10 +623,8 @@ local function jumpToWord(options)
 
         -- find targets that would've been used and filter ones that have different case
         local newTargets = {}
-        local newLabelChars
         for targetsChar, targets in pairs(wordStartTargetsByChar) do
             if test(targetsChar, oldInputMatch, oldInputCache) then
-                newLabelChars = targets.labelChars
                 for _, target in ipairs(targets) do
                     if test(target.char, inputMatch, matchCache) then
                         table.insert(newTargets, target)
@@ -601,51 +634,42 @@ local function jumpToWord(options)
             end
         end
 
-        if #newTargets ~= 0 then
-          curTargets = newTargets
-          curLabelChars = newLabelChars
-        end
+        if #newTargets ~= 0 then curTargets = newTargets end
     else
         for targetsChar, targets in pairs(wordStartTargetsByChar) do
             if test(targetsChar, inputMatch, matchCache) then
                 curTargets = targets
-                curLabelChars = targets.labelChars
                 break
             end
         end
     end
 
+    if not curTargets or #curTargets == 0 then
+        vim.api.nvim_echo({{ 'no targets', 'ErrorMsg' }}, true, {})
+        return
+    end
+
     -- input character is not a 'word' character, but '=' or '[', etc.
-    -- they are not displayed before the first input char because
+    -- only the first of each is calculated before the first input because
     -- e.g. parentheses create too much noise
-    if curTargets == nil then
-        curTargets = get_targets(
-            bufId, topLine, botLine,
-            function(chars, i)
-                return test(chars[i], inputMatch, matchCache)
-                    and test_split_identifiers(chars, i)
-            end
-        )
-        if #curTargets > 1 then
-            local labels = options:get_typed_labels(inputChar)
-            curTargets = assignTargetLabels(curTargets, cursorPos, labels, caseSensitive)
-            curLabelChars = labels
-        end
+    if curTargets.orig then
+        local newTargets = assignTargetLabels(curTargets.orig, cursorPos, curTargets.labelChars, caseSensitive)
+        newTargets.labelChars = curTargets.labelChars
+        newTargets.priority = curTargets.priority
+        curTargets = newTargets
+    end
+
+    local curLabelChars = curTargets.labelChars
+
+    if #curTargets == 1 and options.special_target_labels.unique then
+        local pos = curTargets[1].pos
+        vim.fn.setpos('.', { 0, pos[1], pos[2], 0, pos.charI })
+        return
     end
 
     -- find the terget to jump to, jump to that target
     local i = 1
     while true do
-        if #curTargets == 0 then
-            vim.api.nvim_echo({{ 'no target', 'ErrorMsg' }}, true, {})
-            break
-        end
-        if #curTargets == 1 then
-            local pos = curTargets[1].pos
-            vim.fn.setpos('.', { 0, pos[1], pos[2], 0, pos.charI })
-            break
-        end
-
         clear()
 
         for _, target in ipairs(curTargets) do
@@ -656,7 +680,8 @@ local function jumpToWord(options)
                     { labelString(displayLabels, target.label), hl.rest_label },
                 },
                 virt_text_pos = 'overlay',
-                hl_mode = 'combine'
+                hl_mode = 'combine',
+                priority = curTargets.priority
             })
         end
 
@@ -689,7 +714,15 @@ local function jumpToWord(options)
           end
         end
 
-        if found then newTargets = { found } end
+        if found then
+            local pos = found.pos
+            vim.fn.setpos('.', { 0, pos[1], pos[2], 0, pos.charI })
+            return
+        end
+        if #newTargets == 0 then
+            vim.api.nvim_echo({{ 'no target', 'ErrorMsg' }}, true, {})
+            return
+        end
 
         curTargets = newTargets
         i = i + 1
