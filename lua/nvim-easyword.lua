@@ -169,9 +169,15 @@ local defaultOptions = {
         's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o',
         'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
     },
+    special_targets = {
+        unique = true, -- treat unique targets specially (don't assign labels)
+        first = false, -- true = don't display target char in label, use special highlight
+    },
     highlight = {
         backdrop = 'EasywordBackdrop',
         unique = 'EasywordUnique',
+        target_first = 'EasywordTargetFirst',
+        target_first_typed = 'EasywordTargetFirstTyped',
         typed_char = 'EasywordTypedChar',
         rest_char = 'EasywordRestChar',
         typed_label = 'EasywordTypedLabel',
@@ -191,9 +197,19 @@ end
 local function applyDefaultHighlight(opts)
     local options = createOptions(opts)
     vim.api.nvim_set_hl(0, options.highlight.backdrop, { link = 'Comment' })
-    vim.api.nvim_set_hl(0, options.highlight.unique, { bg = 'white', fg = 'black', bold = true })
+
     vim.api.nvim_set_hl(0, options.highlight.typed_char, { sp='red', underline=true, bold = true })
     vim.api.nvim_set_hl(0, options.highlight.rest_char, { bg = 'black', fg = 'grey', bold = true })
+
+    vim.api.nvim_set_hl(0, options.highlight.unique, { bg = 'white', fg = 'black', bold = true })
+
+    vim.api.nvim_set_hl(0, options.highlight.target_first, {
+        bg = 'white', fg = 'black', bold = true,
+    })
+    vim.api.nvim_set_hl(0, options.highlight.target_first_typed, {
+        bg = 'white', fg = 'black', sp = 'red', underline = true, bold = true,
+    })
+
     vim.api.nvim_set_hl(0, options.highlight.typed_label, { sp='red', underline=true, bold = true })
     vim.api.nvim_set_hl(0, options.highlight.rest_label, { bg = 'black', fg = 'white', bold = true })
 end
@@ -257,20 +273,65 @@ local function computeLabels(labelCharsI, max)
 end
 
 local function labelString(displayLabels, label)
-    if not label then
-      return ''
-    elseif label.literal then
-      return label.literal
-    else
-      local s = ''
-      if label[1] > 0 then
+    local s = ''
+    if label[1] > 0 then
         s = displayLabels[label[2]]:rep(label[1])
-      end
-      if label[3] then
-        s = s .. displayLabels[label[3]]
-      end
-      return s
     end
+    if label[3] then
+        s = s .. displayLabels[label[3]]
+    end
+    return s
+end
+
+local function displayLabel(target, priority, options, firstTyped)
+    local hl = options.highlight
+    local ns = options.namespace
+    local tl = options.special_targets
+    local displayLabels = options.labels
+
+    local virt_text
+    if not target.label then
+        if tl.first then
+            if firstTyped then
+                virt_text = { { target.char, hl.target_first_typed } }
+            else
+                virt_text = { { target.char, hl.target_first } }
+            end
+        else
+            if firstTyped then
+                virt_text = {
+                    { target.char, hl.typed_char },
+                    { target.char, hl.rest_label },
+                }
+            else
+                virt_text = {
+                    { target.char, hl.rest_char },
+                    { target.char, hl.rest_label },
+                }
+            end
+        end
+    else
+        if firstTyped then
+            virt_text = {
+                { target.char, hl.typed_char },
+                { labelString(displayLabels, target.typedLabel), hl.typed_label },
+                { labelString(displayLabels, target.label), hl.rest_label },
+            }
+        else
+            virt_text = {
+                { target.char, hl.rest_char },
+                { labelString(displayLabels, target.typedLabel), hl.typed_label },
+                { labelString(displayLabels, target.label), hl.rest_label },
+            }
+        end
+    end
+
+    vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
+        virt_text = virt_text,
+        virt_text_pos = 'overlay',
+        hl_mode = 'combine',
+        priority = priority,
+    })
 end
 
 --- index of first target >= position
@@ -351,7 +412,7 @@ local function sortTargets(cursorPos, targets)
 end
 
 local function setFirstTargetLabel(target, caseSensitive)
-    target.label = { literal = target.char }
+    target.label = nil
     target.match = makeCharMatch(target.char, caseSensitive)
     target.matchCache = eqClassCache(target.char, caseSensitive)
 end
@@ -419,6 +480,59 @@ local function assignTargetUniqueLabels(targets, cursorPos)
 
     setFirstTargetLabel(firstTarget, caseSensitive)
     return { firstTarget, orig = targets }
+end
+
+local function assignGroupLabels(key, targets, options, cursorPos, caseSensitive)
+    local hl = options.highlight
+    local ns = options.namespace
+    local tl = options.special_targets
+    local displayLabels = options.labels
+
+    if #targets == 1 then
+        local target = targets[1]
+
+        if tl.unique then
+            targets.priority = 65535
+            vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
+                virt_text = { { target.char, hl.unique } },
+                virt_text_pos = 'overlay',
+                hl_mode = 'combine',
+                priority = targets.priority,
+            })
+        else
+            local labels = options:get_typed_labels(key)
+            local priority
+            if test(key, patterns.word.match, patterns.word.cache) then
+                priority = 65534
+            else
+                priority = 65533
+            end
+            targets.labelChars = labels
+            targets.priority = priority
+
+            setFirstTargetLabel(target)
+
+            displayLabel(target, priority, options, false)
+        end
+    else
+        local labels = options:get_typed_labels(key)
+        local priority
+        if test(key, patterns.word.match, patterns.word.cache) then
+            targets = assignTargetLabels(targets, cursorPos, labels, caseSensitive, options.target_first)
+            priority = 65534
+        else
+            targets = assignTargetUniqueLabels(targets, cursorPos)
+            priority = 65533
+        end
+        targets.labelChars = labels
+        targets.priority = priority
+
+        for _, target in ipairs(targets) do
+            displayLabel(target, priority, options, false)
+        end
+
+        return targets
+    end
 end
 
 local Timer = {}
@@ -551,37 +665,9 @@ local function jumpToWord(options)
 
     -- assign labels to groups of targets and display them
     for key, targets in pairs(wordStartTargetsByChar) do
-        if #targets == 1 then
-            local target = targets[1]
-            vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
-                virt_text = { { target.char, hl.unique } },
-                virt_text_pos = 'overlay',
-                hl_mode = 'combine'
-            })
-        else
-            local labels = options:get_typed_labels(key)
-            local priority
-            if test(key, patterns.word.match, patterns.word.cache) then
-              targets = assignTargetLabels(targets, cursorPos, labels, caseSensitive)
-              priority = 65535
-            else
-              targets = assignTargetUniqueLabels(targets, cursorPos)
-              priority = 65534
-            end
-            targets.labelChars = labels
-            targets.priority = priority
-            wordStartTargetsByChar[key] = targets
-            for _, target in ipairs(targets) do
-                vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
-                    virt_text = {
-                        { target.char, hl.rest_char },
-                        { labelString(displayLabels, target.label), hl.rest_label },
-                    },
-                    virt_text_pos = 'overlay',
-                    hl_mode = 'combine',
-                    priority = priority,
-                })
-            end
+        local newTargets = assignGroupLabels(key, targets, options, cursorPos, caseSensitive)
+        if newTargets then
+            wordStartTargetsByChar[key] = newTargets
         end
     end
 
@@ -661,7 +747,7 @@ local function jumpToWord(options)
 
     local curLabelChars = curTargets.labelChars
 
-    if #curTargets == 1 and options.special_target_labels.unique then
+    if #curTargets == 1 and options.special_targets.unique then
         local pos = curTargets[1].pos
         vim.fn.setpos('.', { 0, pos[1], pos[2], 0, pos.charI })
         return
@@ -673,16 +759,7 @@ local function jumpToWord(options)
         clear()
 
         for _, target in ipairs(curTargets) do
-            vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
-                virt_text = {
-                    { target.char, hl.typed_char },
-                    { labelString(displayLabels, target.typedLabel), hl.typed_label },
-                    { labelString(displayLabels, target.label), hl.rest_label },
-                },
-                virt_text_pos = 'overlay',
-                hl_mode = 'combine',
-                priority = curTargets.priority
-            })
+            displayLabel(target, curTargets.priority, options, true)
         end
 
         vim.cmd.redraw()
@@ -693,7 +770,7 @@ local function jumpToWord(options)
         local found
 
         for _, target in ipairs(curTargets) do
-          if target.label.literal then
+          if not target.label then
             if test(inputChar, target.match, target.matchCache) then
               found = target
               break
