@@ -1,6 +1,8 @@
 local vim = vim
 local unpack = table.unpack or unpack
 
+local bit = require('bit')
+
 local function replace_keycodes(s)
     return vim.api.nvim_replace_termcodes(s, true, false, true)
 end
@@ -350,7 +352,7 @@ local function findPosition(targets, position)
     local begin = 1
     local en = #targets + 1
     while begin < en do
-        local m = begin + math.floor((en - begin) / 2)
+        local m = begin + bit.rshift(en - begin, 1)
         local v = targets[m]
         if v.pos[1] < position[1] or (v.pos[1] == position[1] and v.pos[2] < position[2]) then
             begin = m + 1
