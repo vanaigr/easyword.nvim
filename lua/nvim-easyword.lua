@@ -1,9 +1,6 @@
 local vim = vim
 local unpack = table.unpack or unpack
 
--- code is taken from https://github.com/VanaIgr/leap-by-word.nvim.git
--- (fork from https://github.com/Sleepful/leap-by-word.nvim)
-
 local function replace_keycodes(s)
     return vim.api.nvim_replace_termcodes(s, true, false, true)
 end
@@ -15,38 +12,36 @@ local function get_input()
     else return nil end
 end
 
--- patterns and functions for testing if a character should be considered a target
+local function toBoolean(value)
+    if value then return true else return false end
+end
+
+
+--- patterns and functions for testing if a character should be considered a target ---
+
 local patterns = {
-    upper = { match = [=[\v[[:upper:]]\C]=], cache = {} },
-    lower = { match = [=[\v[[:lower:]]\C]=], cache = {} },
-    digit = { match = [=[\v[[:digit:]]\C]=], cache = {} },
-    word  = { match = [=[\v[[:upper:][:lower:][:digit:]]\C]=], cache = {} },
+    upper = { match = vim.regex('[[:upper:]]'), cache = {} },
+    lower = { match = vim.regex('[[:lower:]]'), cache = {} },
+    digit = { match = vim.regex('[[:digit:]]'), cache = {} },
+    word  = { match = vim.regex('[[:upper:][:lower:][:digit:]]'), cache = {} },
 }
 
-local equivalenceCache = { {}, {} } -- case insensitive, sensitive
+local equivalenceCache = { {}, {} } -- { case insensitive, case sensitive }
 
-do -- populate caches
-    for _, v in pairs(patterns) do
-        -- for some reason, vim gives 
-        -- 'E5108: Error executing lua Vim:E976: using Blob as a String'
-        -- for ANY function in vim.fn if string contains \0
-        -- we know that neigher of pattrens patch \0, so just set it before
-        v.cache[string.char(0)] = false
-
-        for i = 1, 127 do
-            local char = string.char(i)
-            v.cache[char] = vim.fn.match(char, v.match) == 0
-        end
+-- populate caches
+for _, v in pairs(patterns) do
+    for i = 0, 127 do
+        local char = string.char(i)
+        v.cache[char] = v.match:match_str(char) ~= nil
     end
 end
 
 local function test(char, match, matchCache)
-    -- vim.fn.match returns false for nil char, but not if pattern contains `[:lower:]`
     if char == nil then return false end
 
     local value = matchCache[char]
     if value == nil then
-        value = vim.fn.match(char, match) == 0
+        value = match:match_str(char) ~= nil
         matchCache[char] = value
     end
     return value
@@ -77,15 +72,13 @@ local function splitByChars(str)
     return result
 end
 
-local function toBoolean(value)
-    if value then return true else return false end
-end
-
 local function makeCharMatch(char, caseSensitive)
+  -- I hope this wouldn't need to be escaped
+  -- since I have no idea how to escape it
   if caseSensitive then 
-    return '\\v[[='..char..'=]]\\C'
+    return vim.regex('[[='..char..'=]]')
   else 
-    return '\\v[[='..char..'=]]\\c'
+    return vim.regex('[[='..char..'=]]\\c')
   end
 end
 
