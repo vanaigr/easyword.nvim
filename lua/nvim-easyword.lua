@@ -47,6 +47,23 @@ local function test(char, match, matchCache)
     return value
 end
 
+-- Ideally should match one character that can be typed.
+-- Currently matches a single (possibly multibyte)
+-- character without combining chars
+local inputChar = vim.regex('.')
+
+-- returns true if if str can be inputed by user
+-- (if get_input() can return str)
+function canBeInputed(str)
+  local byte = string.byte(str, 1)
+  if byte < 128 then --ascii
+    return #str == 1
+  else
+    local start, en = inputChar:match_str(str)
+    return start == 0 and en == #str
+  end
+end
+
 local function splitByChars(str)
     local result = {}
     local i = 1
@@ -137,6 +154,7 @@ local function get_targets(bufId, topLine, botLine)
             local line = vim.api.nvim_buf_get_lines(bufId, lnum-1, lnum, true)[1]
             local chars = splitByChars(line)
 
+            -- if I could just use utf_ptr2CharInfo() ...
             local col = 1
             for i, cur in ipairs(chars) do
                 if test_split_identifiers(chars, i) then
@@ -679,11 +697,12 @@ local function jumpToWord(options)
     -- (would break first target, which assumes other targets don't take its character)
     local sensitivityChanged = false
     if not caseSensitive and options.smart_case then
-        local upperChar = splitByChars(vim.fn.toupper(inputChar))
-        local lowerChar = splitByChars(vim.fn.tolower(inputChar))
+        local upperChar = vim.fn.toupper(inputChar)
+        local lowerChar = vim.fn.tolower(inputChar)
 
-        -- if both cases can be typed, are different, and current input character is uppper case
-        if #upperChar == 1 and #lowerChar == 1 and upperChar[1] ~= lowerChar[1] and inputChar == upperChar[1] then
+        if canBeInputed(upperChar) and canBeInputed(lowerChar) 
+          and upperChar ~= lowerChar and inputChar == upperChar
+        then
           sensitivityChanged = true
           caseSensitive = true
         end
