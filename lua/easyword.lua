@@ -218,8 +218,8 @@ local function applyDefaultHighlight(opts)
     local options = createOptions(opts)
     vim.api.nvim_set_hl(0, options.highlight.backdrop, { link = 'Comment' })
 
-    vim.api.nvim_set_hl(0, options.highlight.typed_char, { sp='red', underline=true, bold = true })
-    vim.api.nvim_set_hl(0, options.highlight.rest_char, { bg = 'black', fg = 'grey', bold = true })
+    vim.api.nvim_set_hl(0, options.highlight.typed_char, { sp = 'red', underline = true, bold = true })
+    vim.api.nvim_set_hl(0, options.highlight.rest_char, { fg = 'grey', sp='grey', underline = true, bold = true })
 
     vim.api.nvim_set_hl(0, options.highlight.unique, { bg = 'white', fg = 'black', bold = true })
 
@@ -230,7 +230,7 @@ local function applyDefaultHighlight(opts)
         bg = 'white', fg = 'black', sp = 'red', underline = true, bold = true,
     })
 
-    vim.api.nvim_set_hl(0, options.highlight.typed_label, { sp='red', underline=true, bold = true })
+    vim.api.nvim_set_hl(0, options.highlight.typed_label, { sp = 'red', underline = true, bold  =  true })
     vim.api.nvim_set_hl(0, options.highlight.rest_label, { bg = 'black', fg = 'white', bold = true })
 end
 
