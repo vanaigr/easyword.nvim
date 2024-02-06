@@ -18,7 +18,6 @@ local function toBoolean(value)
     if value then return true else return false end
 end
 
-
 --- patterns and functions for testing if a character should be considered a target ---
 
 local patterns = {
@@ -111,6 +110,11 @@ local function eqClassCache(char, caseSensitive)
     return cache
 end
 
+--- functions for finding targets ---
+
+-- v   v   v     v    v    v    
+-- wordWORDWord  word_WORD WORD ==
+--                   ^          ^
 local function test_split_identifiers(chars, cur_i)
     local cur_char = chars[cur_i]
 
@@ -175,6 +179,8 @@ local function get_targets(bufId, topLine, botLine)
     return targets
 end
 
+--- options ---
+
 local defaultOptions = {
     case_sensitive = false,
     smart_case = true,
@@ -184,7 +190,7 @@ local defaultOptions = {
     },
     special_targets = {
         unique = true, -- treat unique targets specially (don't assign labels)
-        first = false, -- true = don't display target char in label, use special highlight
+        first = false, -- true = don't display target char in label twice, use special highlight
     },
     highlight = {
         backdrop = 'EasywordBackdrop',
@@ -227,7 +233,9 @@ local function applyDefaultHighlight(opts)
     vim.api.nvim_set_hl(0, options.highlight.rest_label, { bg = 'black', fg = 'white', bold = true })
 end
 
---- genetate variable length labels that use at most 2 characters, second char is always used only once at the end
+--- labels ---
+
+-- generate variable length labels that use at most 2 characters, second char is always used only once at the end
 -- returns { { repCount, repCharI, lastCharI }, ... }
 local function computeLabels(labelCharsI, max)
   if #labelCharsI < 2 then
@@ -299,12 +307,12 @@ end
 local function displayLabel(target, priority, options, firstTyped)
     local hl = options.highlight
     local ns = options.namespace
-    local tl = options.special_targets
+    local is_special = options.special_targets
     local displayLabels = options.labels
 
     local virt_text
-    if not target.label then
-        if tl.first then
+    if not target.label then -- if first target (may be special) (unique rendered separately)
+        if is_special.first then
             if firstTyped then
                 virt_text = { { target.char, hl.target_first_typed } }
             else
@@ -333,7 +341,6 @@ local function displayLabel(target, priority, options, firstTyped)
         else
             virt_text = {
                 { target.char, hl.rest_char },
-                { labelString(displayLabels, target.typedLabel), hl.typed_label },
                 { labelString(displayLabels, target.label), hl.rest_label },
             }
         end
@@ -346,6 +353,8 @@ local function displayLabel(target, priority, options, firstTyped)
         priority = priority,
     })
 end
+
+--- functions for assigning labels to targets ---
 
 --- index of first target >= position
 local function findPosition(targets, position)
@@ -363,9 +372,10 @@ local function findPosition(targets, position)
     return begin
 end
 
---- sort labels (originally left -> right, top -> bottom) relative to cursor:
+--- sort labels relative to cursor:
 --- interleave lines with targets above and below cursor, reverse order on line for lines above.
 --- First mark will always be next after cursor, second is previous before the cursor.
+--- Input must be sorted by lines and then columns (increasing)
 local function sortTargets(cursorPos, targets)
     -- may be outside range
     local nextI = findPosition(targets, cursorPos)
@@ -391,7 +401,8 @@ local function sortTargets(cursorPos, targets)
         beforeLineI = curT.pos[1]
     end
 
-    --- sort by lines
+    -- sort by lines
+    -- note: can be unbalanced
     while true do
         local continue = false
         while nextI <= #targets do
@@ -443,8 +454,8 @@ local function assignTargetLabels(targets, cursorPos, labelChars, caseSensitive)
         local charMatch = first.match
         local matchCache = first.matchCache
 
-        -- we need to remove all other label chars that that are quivalent
-        -- case sensitivity is the same as for input characters, since it gives more
+        -- we need to remove all other label chars that that are quivalent.
+        -- Case sensitivity is the same as for input characters, since it gives more
         -- available label chars if case sensitivity is turned on.
         for i = 1, #labelChars do
           if not test(labelChars[i], charMatch, matchCache) then
@@ -498,13 +509,13 @@ end
 local function assignGroupLabels(key, targets, options, cursorPos, caseSensitive)
     local hl = options.highlight
     local ns = options.namespace
-    local tl = options.special_targets
+    local is_special = options.special_targets
     local displayLabels = options.labels
 
     if #targets == 1 then
         local target = targets[1]
 
-        if tl.unique then
+        if is_special.unique then
             targets.priority = 65535
             vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
                 virt_text = { { target.char, hl.unique } },
@@ -548,6 +559,8 @@ local function assignGroupLabels(key, targets, options, cursorPos, caseSensitive
     end
 end
 
+--- measurements ---
+
 local Timer = {}
 
 if false then
@@ -581,6 +594,8 @@ else
   function Timer:print() end
 end
 
+--- main function ---
+
 local function jumpToWord(options)
     local timer = Timer:new()
     timer:add('')
@@ -600,7 +615,7 @@ local function jumpToWord(options)
         vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
         -- For some reason, topLine and botLine are faster than 0 and last line
         -- vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { vim.api.nvim_buf_line_count(bufId), -1 }, { }).
-        -- Also, botline doesn't include partially shown lines. So no -1.
+        -- Also, botline doesn't include partially shown lines. So no ' - 1'.
         vim.highlight.range(bufId, ns, hl.backdrop, { topLine-1, 0 }, { botLine, -1 }, { })
     end
 
@@ -702,8 +717,8 @@ local function jumpToWord(options)
         local upperChar = vim.fn.toupper(inputChar)
         local lowerChar = vim.fn.tolower(inputChar)
 
-        if canBeInputed(upperChar) and canBeInputed(lowerChar) 
-          and upperChar ~= lowerChar and inputChar == upperChar
+        if upperChar ~= lowerChar and inputChar == upperChar
+          and canBeInputed(upperChar) and canBeInputed(lowerChar) 
         then
           sensitivityChanged = true
           caseSensitive = true
@@ -750,7 +765,7 @@ local function jumpToWord(options)
     end
 
     -- input character is not a 'word' character, but '=' or '[', etc.
-    -- only the first of each is calculated before the first input because
+    -- only the first of each is shown before the first input because
     -- e.g. parentheses create too much noise
     if curTargets.orig then
         local newTargets = assignTargetLabels(curTargets.orig, cursorPos, curTargets.labelChars, caseSensitive)
@@ -761,6 +776,7 @@ local function jumpToWord(options)
 
     local curLabelChars = curTargets.labelChars
 
+    -- TODO: don't jump if label wasn't unique before smartcase
     if #curTargets == 1 and options.special_targets.unique then
         local pos = curTargets[1].pos
         vim.fn.setpos('.', { 0, pos[1], pos[2], 0, pos.charI })
@@ -771,7 +787,6 @@ local function jumpToWord(options)
     local i = 1
     while true do
         clear()
-
         for _, target in ipairs(curTargets) do
             displayLabel(target, curTargets.priority, options, true)
         end
@@ -822,6 +837,7 @@ end
 
 local function jump(opts)
     local options = createOptions(opts)
+    -- jumpToWord(options) -- if stacktrace is needed
     local ok, result = pcall(jumpToWord, options)
     if not ok then vim.api.nvim_echo({{'Error: '..vim.inspect(result), 'ErrorMsg'}}, true, {}) end
     vim.api.nvim_buf_clear_namespace(0, options.namespace, 0, -1)
