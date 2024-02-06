@@ -828,7 +828,6 @@ local function jumpToWord(options)
     -- Note: we do this only once, and not at every iterations
     -- since there is no point in showing additional targets after
     -- the first label char was typed.
-    -- TODO: remove targets that are hidden
     local prev = curTargets[1]
     prev.hidden = false
     for i = 2, #curTargets do
@@ -846,14 +845,45 @@ local function jumpToWord(options)
         end
     end
 
+    do -- Remove hidden targets
+        local i = 1
+
+        -- skip visible from start
+        while i <= #curTargets do
+            local target = curTargets[i]
+            if target.hidden then
+                break
+            end
+            i = i + 1
+        end
+        local putI = i
+
+        -- move visible targets to start
+        while i <= #curTargets do
+            local target = curTargets[i]
+            if not target.hidden then
+                curTargets[putI] = target
+                putI = putI + 1
+            end
+            i = i + 1
+        end
+
+        -- remove targets past the end
+        i = #curTargets
+        while i >= putI do
+            curTargets[i] = nil
+            i = i - 1
+        end
+    end
+
+    assert(#curTargets ~= 0)
+
     -- find the terget to jump to, jump to that target
     local i = 1
     while true do
         clear()
         for _, target in ipairs(curTargets) do
-            if not target.hidden then
-                displayLabel(target, options, true)
-            end
+            displayLabel(target, options, true)
         end
 
         vim.cmd.redraw()
