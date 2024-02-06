@@ -164,7 +164,7 @@ local function get_targets(bufId, topLine, botLine)
             local col = 1
             for i, cur in ipairs(chars) do
                 if test_split_identifiers(chars, i) then
-                    -- charI is for curswant.
+                    -- charI is for curswant and label intersection removal.
                     -- The fact that curswant is 1-idexed and measured in characters 
                     -- and not bytes or screen cells is a secret (shh, don't tell anyone)
                     table.insert(targets, { char = cur, pos = { lnum, col, charI = i } })
@@ -184,7 +184,7 @@ end
 local defaultOptions = {
     case_sensitive = false,
     smart_case = true,
-    labels = { -- don't use tab here
+    labels = { -- must be all unique and 1 cell wide
         's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o',
         'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
     },
@@ -304,7 +304,17 @@ local function labelString(displayLabels, label)
     return s
 end
 
-local function displayLabel(target, priority, options, firstTyped)
+-- Ideally should take into account display labels size
+-- and position on screen (for tabs).
+-- Assumes all chars are 1 cell wide
+local function labelLength(label)
+    local len = 0
+    if label[1] > 0 then len = label[1] end
+    if label[3] then len = len + 1 end
+    return len
+end
+
+local function displayLabel(target, options, firstTyped)
     local hl = options.highlight
     local ns = options.namespace
     local is_special = options.special_targets
@@ -312,7 +322,9 @@ local function displayLabel(target, priority, options, firstTyped)
 
     local virt_text
     if not target.label then -- if first target (may be special) (unique rendered separately)
-        if is_special.first then
+        if is_special.unique and target.unique then
+            virt_text = { { target.char, hl.unique } }
+        elseif is_special.first then
             if firstTyped then
                 virt_text = { { target.char, hl.target_first_typed } }
             else
@@ -350,8 +362,26 @@ local function displayLabel(target, priority, options, firstTyped)
         virt_text = virt_text,
         virt_text_pos = 'overlay',
         hl_mode = 'combine',
-        priority = priority,
     })
+end
+
+-- Ideally should take into account display labels size
+-- and position on screen (for tabs).
+-- Assumes all chars are 1 cell wide
+local function targetLabelLen(target, options)
+    local is_special = options.special_targets
+
+    if not target.label then
+        if is_special.unique and target.unique then
+            return 1
+        elseif is_special.first then
+            return 1
+        else
+            return 2
+        end
+    else
+        return 1 + labelLength(target.typedLabel) + labelLength(target.label)
+    end
 end
 
 --- functions for assigning labels to targets ---
@@ -446,122 +476,14 @@ local function setUniqueTargetLabel(target)
   target.unique = true
 end
 
-local function assignTargetLabels(targets, cursorPos, labelChars, caseSensitive)
-    targets = sortTargets(cursorPos, targets)
-    local labelCharsI = {}
-
-    -- first target is special, its labes is the key itself
-    local first = targets[1]
-    local targetStart = 1
-    if first then
-        targetStart = 2
-        setFirstTargetLabel(first)
-        local charMatch = first.match
-        local matchCache = first.matchCache
-
-        -- we need to remove all other label chars that that are quivalent.
-        -- Case sensitivity is the same as for input characters, since it gives more
-        -- available label chars if case sensitivity is turned on.
-        for i = 1, #labelChars do
-          if not test(labelChars[i], charMatch, matchCache) then
-            table.insert(labelCharsI, i)
-          end
-        end
+-- more priority == more important
+local function getKeyPriority(key)
+    if key == ' ' or key == '\t' then
+        return 0
+    elseif test(key, patterns.word.match, patterns.word.cache) then
+        return 2
     else
-        for i = 1, #labelChars do
-            table.insert(labelCharsI, i)
-        end
-    end
-
-    local labels = computeLabels(labelCharsI, #targets - targetStart + 1)
-    for i = 1, #targets - targetStart + 1 do
-        local target = targets[targetStart + i - 1]
-        target.label = labels[i]
-        target.typedLabel = { 0, labels[i][2] }
-    end
-
-    return targets
-end
-
--- if only the first label needs to be shown
--- return a list with one label and all info to reconstruct
--- normal labels later
-local function assignTargetUniqueLabels(targets, cursorPos)
-    if #targets == 0 then return targets end
-
-    -- may be outside range
-    local nextI = findPosition(targets, cursorPos)
-    local prevI = nextI - 1
-
-    -- note: might have to sort the targets later.
-    -- there is no easy way to 'resume' sorting
-    -- from after finding the first label, so we have to
-    -- rely on sorting choosing the same first target
-    -- add assignTargetLabels() to produce the same label
-    -- for it
-    local firstTarget
-    if nextI <= #targets then
-        firstTarget = targets[nextI]
-    else
-        firstTarget = targets[prevI]
-    end
-    assert(firstTarget ~= nil)
-
-    setFirstTargetLabel(firstTarget, caseSensitive)
-    return { firstTarget, orig = targets }
-end
-
-local function assignGroupLabels(key, targets, options, cursorPos, caseSensitive)
-    local hl = options.highlight
-    local ns = options.namespace
-    local is_special = options.special_targets
-    local displayLabels = options.labels
-
-    if #targets == 1 then
-        local target = targets[1]
-
-        if is_special.unique then
-            targets.priority = 65535
-            setUniqueTargetLabel(target)
-            vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
-                virt_text = { { target.char, hl.unique } },
-                virt_text_pos = 'overlay',
-                hl_mode = 'combine',
-                priority = targets.priority,
-            })
-        else
-            local labels = options:get_typed_labels(key)
-            local priority
-            if test(key, patterns.word.match, patterns.word.cache) then
-                priority = 65534
-            else
-                priority = 65533
-            end
-            targets.labelChars = labels
-            targets.priority = priority
-
-            setFirstTargetLabel(target)
-
-            displayLabel(target, priority, options, false)
-        end
-    else
-        local labels = options:get_typed_labels(key)
-        local priority
-        if test(key, patterns.word.match, patterns.word.cache) then
-            targets = assignTargetLabels(targets, cursorPos, labels, caseSensitive, options.target_first)
-            priority = 65534
-        else
-            targets = assignTargetUniqueLabels(targets, cursorPos)
-            priority = 65533
-        end
-        targets.labelChars = labels
-        targets.priority = priority
-
-        for _, target in ipairs(targets) do
-            displayLabel(target, priority, options, false)
-        end
-
-        return targets
+        return 1
     end
 end
 
@@ -609,6 +531,7 @@ local function jumpToWord(options)
     local hl = options.highlight
     local ns = options.namespace
     local displayLabels = options.labels
+    local is_special = options.special_targets
 
     local winid = vim.api.nvim_get_current_win()
     local bufId = vim.api.nvim_win_get_buf(winid)
@@ -667,7 +590,8 @@ local function jumpToWord(options)
 
     local caseSensitive = toBoolean(options.case_sensitive)
 
-    -- group targets by characters
+    -- group targets by characters.
+    -- Targets are kept in the same order
     local wordStartTargetsByChar = {}
     for _, target in ipairs(wordStartTargets) do
         local tChar = target.char
@@ -699,9 +623,126 @@ local function jumpToWord(options)
 
     -- assign labels to groups of targets and display them
     for key, targets in pairs(wordStartTargetsByChar) do
-        local newTargets = assignGroupLabels(key, targets, options, cursorPos, caseSensitive)
-        if newTargets then
-            wordStartTargetsByChar[key] = newTargets
+        local priority = getKeyPriority(key)
+        if #targets == 1 then
+            local target = targets[1]
+            target.priority = priority -- maybe prioritize uniquie more if word chars?
+            if is_special.unique then
+                setUniqueTargetLabel(target)
+            else
+                local labels = options:get_typed_labels(key)
+                targets.labelChars = labels
+                setFirstTargetLabel(target)
+            end
+        else
+            local labelChars = options:get_typed_labels(key)
+            targets.labelChars = labelChars
+
+            local sortedTargets = sortTargets(cursorPos, targets)
+            local labelCharsI = {}
+
+            -- first target is special, its label is the key itself
+            local first = sortedTargets[1]
+            local targetStart = 1
+            if first then
+                targetStart = 2
+                setFirstTargetLabel(first)
+                first.priority = priority
+                local charMatch = first.match
+                local matchCache = first.matchCache
+
+                -- we need to remove all other label chars that that are quivalent.
+                -- Case sensitivity is the same as for input characters, as it gives more
+                -- available label chars if case sensitivity is turned on.
+                for i = 1, #labelChars do
+                    if not test(labelChars[i], charMatch, matchCache) then
+                        table.insert(labelCharsI, i)
+                    end
+                end
+            else
+                for i = 1, #labelChars do
+                    table.insert(labelCharsI, i)
+                end
+            end
+
+            local labels = computeLabels(labelCharsI, #targets - targetStart + 1)
+            for i = 1, #targets - targetStart + 1 do
+                local target = sortedTargets[targetStart + i - 1]
+                target.priority = priority
+                target.label = labels[i]
+                target.typedLabel = { 0, labels[i][2] }
+            end
+        end
+    end
+
+    timer:add('labels')
+
+    -- remove targets with intersecting labels
+    -- TODO: reassign labels? (should all be shorter than before)
+    if #wordStartTargets > 1 then
+        -- Go through the visible targets once for each priority
+        -- (starting from highest) and remove targets at that priority
+        -- if they intersect with other targets with priority >= cur.
+
+        local prev
+        -- Compute end bound (inclusive). Assumes all chars are length 1
+        for i, t in ipairs(wordStartTargets) do
+            local start = t.pos.charI
+            t.pos.charEndI = t.pos.charI + targetLabelLen(t, options) - 1
+
+            -- don't show labels on leading whitespace yet (ugly)
+            if t.priority == 0 and t.pos.charI == 1 then t.hidden = true
+            elseif t.priority == 2 then -- and t is not hidden
+                -- remove intersecting at highest stage (since we're iterating them anyway)
+                if prev and t.pos[1] == prev.pos[1] and t.pos.charI <= prev.pos.charEndI then
+                    if prev.pos.charEndI > cur.pos.charEndI then
+                        prev.hidden = true
+                        prev = cur
+                    else
+                        cur.hidden = the
+                    end
+                else
+                    prev = cur
+                end
+            end
+        end
+
+        -- hide intersecting targets
+        for stage = 1, 0, -1 do
+            -- find starting target (visible, priority >= current)
+            local prevI = 1
+            local prev = wordStartTargets[prevI]
+            while prev and (prev.hidden or prev.priority < stage) do
+                prevI = prevI + 1
+                prev = wordStartTargets[prevI]
+            end
+
+            local i = prevI + 1
+            while i <= #wordStartTargets do
+                local cur = wordStartTargets[i]
+                if not cur.hidden and cur.priority >= stage then
+                    if cur.pos[1] == prev.pos[1] and cur.pos.charI <= prev.pos.charEndI then
+                        -- it's better to keep prev if priorities are equal and it stops at same column?
+                        if prev.priority < cur.priority or prev.pos.charEndI > cur.pos.charEndI then
+                            prev.hidden = true
+                            prev = cur
+                        else
+                            cur.hidden = true
+                        end
+                    else
+                        prev = cur
+                    end
+                end
+                i = i + 1
+            end
+        end
+    end
+
+    timer:add('remove overlap')
+
+    for _, target in ipairs(wordStartTargets) do
+        if not target.hidden then
+            displayLabel(target, options, false)
         end
     end
 
@@ -752,7 +793,6 @@ local function jumpToWord(options)
                     end
                 end
                 newTargets.labelChars = targets.labelChars
-                newTargets.priority = targets.priority
                 break
             end
         end
@@ -774,16 +814,6 @@ local function jumpToWord(options)
         return
     end
 
-    -- input character is not a 'word' character, but '=' or '[', etc.
-    -- only the first of each is shown before the first input because
-    -- e.g. parentheses create too much noise
-    if curTargets.orig then
-        local newTargets = assignTargetLabels(curTargets.orig, cursorPos, curTargets.labelChars, caseSensitive)
-        newTargets.labelChars = curTargets.labelChars
-        newTargets.priority = curTargets.priority
-        curTargets = newTargets
-    end
-
     local curLabelChars = curTargets.labelChars
 
     -- note: only if target was unique before (not if it became unique after smart case
@@ -794,12 +824,36 @@ local function jumpToWord(options)
         return
     end
 
+    -- recalculate if targets are hidden.
+    -- Note: we do this only once, and not at every iterations
+    -- since there is no point in showing additional targets after
+    -- the first label char was typed.
+    -- TODO: remove targets that are hidden
+    local prev = curTargets[1]
+    prev.hidden = false
+    for i = 2, #curTargets do
+        local cur = curTargets[i]
+        cur.hidden = false
+        if cur.pos[1] == prev.pos[1] and cur.pos.charI <= prev.pos.charEndI then
+            if prev.pos.charEndI > cur.pos.charEndI then
+                prev.hidden = true
+                prev = cur
+            else
+                cur.hidden = true
+            end
+        else
+            prev = cur
+        end
+    end
+
     -- find the terget to jump to, jump to that target
     local i = 1
     while true do
         clear()
         for _, target in ipairs(curTargets) do
-            displayLabel(target, curTargets.priority, options, true)
+            if not target.hidden then
+                displayLabel(target, options, true)
+            end
         end
 
         vim.cmd.redraw()
