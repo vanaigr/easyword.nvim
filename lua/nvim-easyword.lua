@@ -189,8 +189,8 @@ local defaultOptions = {
         'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
     },
     special_targets = {
-        unique = true, -- treat unique targets specially (don't assign labels)
-        first = false, -- true = don't display target char in label twice, use special highlight
+        unique = false, -- treat unique targets specially (don't assign labels)
+        first = true, -- true = don't display target char in label twice, use special highlight
     },
     highlight = {
         backdrop = 'EasywordBackdrop',
