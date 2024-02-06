@@ -30,9 +30,9 @@ local patterns = {
 local equivalenceCache = { {}, {} } -- { case insensitive, case sensitive }
 
 -- populate caches
-for _, v in pairs(patterns) do
-    for i = 0, 127 do
-        local char = string.char(i)
+for i = 0, 127 do
+    local char = string.char(i)
+    for _, v in pairs(patterns) do
         v.cache[char] = v.match:match_str(char) ~= nil
     end
 end
@@ -184,7 +184,7 @@ end
 local defaultOptions = {
     case_sensitive = false,
     smart_case = true,
-    labels = { -- must be all unique and 1 cell wide
+    labels = { -- must be all unique and 1 cell wide. At lest 2
         's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o',
         'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
     },
@@ -204,6 +204,7 @@ local defaultOptions = {
     },
     namespace = vim.api.nvim_create_namespace('Easyword'),
 }
+
 function defaultOptions:get_typed_labels(char)
   return self.labels -- must be same length as self.labels
 end
@@ -586,7 +587,7 @@ local function jumpToWord(options)
         end
     end
 
-    timer:add('remove dup')
+    timer:add('remove at cursor')
 
     local caseSensitive = toBoolean(options.case_sensitive)
 
@@ -749,6 +750,7 @@ local function jumpToWord(options)
     timer:add('end')
 
     timer:print()
+    --print(#wordStartTargets)
 
     vim.cmd.redraw()
     local inputChar = get_input()
@@ -814,11 +816,9 @@ local function jumpToWord(options)
         return
     end
 
-    local curLabelChars = curTargets.labelChars
-
     -- note: only if target was unique before (not if it became unique after smart case
     -- since that would be unexpected)
-    if #curTargets == 1 and curTargets[1].unique and options.special_targets.unique then
+    if options.special_targets.unique and curTargets[1].unique then
         local pos = curTargets[1].pos
         vim.fn.setpos('.', { 0, pos[1], pos[2], 0, pos.charI })
         return
@@ -878,6 +878,8 @@ local function jumpToWord(options)
 
     assert(#curTargets ~= 0)
 
+    local labelChars = curTargets.labelChars
+
     -- find the terget to jump to, jump to that target
     local i = 1
     while true do
@@ -901,13 +903,13 @@ local function jumpToWord(options)
             end
           else
             if target.label[1] > 0 then
-              if inputChar == curLabelChars[target.label[2]] then
+              if inputChar == labelChars[target.label[2]] then
                 target.label[1] = target.label[1] - 1
                 target.typedLabel[1] = target.typedLabel[1] + 1
                 table.insert(newTargets, target)
               end
             else
-              if inputChar == curLabelChars[target.label[3]] then
+              if inputChar == labelChars[target.label[3]] then
                 found = target
                 break
               end
