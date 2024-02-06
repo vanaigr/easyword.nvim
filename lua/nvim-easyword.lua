@@ -441,6 +441,11 @@ local function setFirstTargetLabel(target, caseSensitive)
     target.matchCache = eqClassCache(target.char, caseSensitive)
 end
 
+local function setUniqueTargetLabel(target)
+  target.label = nil
+  target.unique = true
+end
+
 local function assignTargetLabels(targets, cursorPos, labelChars, caseSensitive)
     targets = sortTargets(cursorPos, targets)
     local labelCharsI = {}
@@ -517,6 +522,7 @@ local function assignGroupLabels(key, targets, options, cursorPos, caseSensitive
 
         if is_special.unique then
             targets.priority = 65535
+            setUniqueTargetLabel(target)
             vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
                 virt_text = { { target.char, hl.unique } },
                 virt_text_pos = 'overlay',
@@ -745,11 +751,15 @@ local function jumpToWord(options)
                         table.insert(newTargets, target)
                     end
                 end
+                newTargets.labelChars = targets.labelChars
+                newTargets.priority = targets.priority
                 break
             end
         end
 
-        if #newTargets ~= 0 then curTargets = newTargets end
+        if #newTargets ~= 0 then
+          curTargets = newTargets
+        end
     else
         for targetsChar, targets in pairs(wordStartTargetsByChar) do
             if test(targetsChar, inputMatch, matchCache) then
@@ -776,8 +786,9 @@ local function jumpToWord(options)
 
     local curLabelChars = curTargets.labelChars
 
-    -- TODO: don't jump if label wasn't unique before smartcase
-    if #curTargets == 1 and options.special_targets.unique then
+    -- note: only if target was unique before (not if it became unique after smart case
+    -- since that would be unexpected)
+    if #curTargets == 1 and curTargets[1].unique and options.special_targets.unique then
         local pos = curTargets[1].pos
         vim.fn.setpos('.', { 0, pos[1], pos[2], 0, pos.charI })
         return
