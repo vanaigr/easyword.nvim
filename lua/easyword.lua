@@ -809,7 +809,7 @@ local function jumpToWord(options)
         local prev = curTargets[lastVisibleI]
         local cur = curTargets[i]
         if cur.pos[1] == prev.pos[1] and cur.pos.charI <= prev.pos.charEndI then
-            if prev.pos.charEndI > cur.pos.charEndI then
+            if not cur.hidden or (prev.hidden and prev.pos.charEndI > cur.pos.charEndI) then
                 curTargets[lastVisibleI] = cur
             end
         else
