@@ -294,69 +294,46 @@ local function computeLabels(labelCharsI, max)
   return labels
 end
 
-local function labelString(displayLabels, label)
-    local s = ''
-    if label[1] > 0 then
-        s = displayLabels[label[2]]:rep(label[1])
-    end
-    if label[3] then
-        s = s .. displayLabels[label[3]]
-    end
-    return s
+local function choose(cond, ifTrue, ifFalse)
+    if cond then return ifTrue
+    else return ifFalse end
 end
 
--- Ideally should take into account display labels size
--- and position on screen (for tabs).
--- Assumes all chars are 1 cell wide
-local function labelLength(label)
-    local len = 0
-    if label[1] > 0 then len = label[1] end
-    if label[3] then len = len + 1 end
-    return len
-end
-
-local function displayLabel(target, options, firstTyped)
+local function displayLabel(target, options, stage)
     local hl = options.highlight
     local ns = options.namespace
     local is_special = options.special_targets
     local displayLabels = options.labels
+    local l = target.label
 
     local virt_text
-    if not target.label then -- if first target (may be special) (unique rendered separately)
+    if not l then -- if first target (may be special) (unique rendered separately)
         if is_special.unique and target.unique then
             virt_text = { { target.char, hl.unique } }
         elseif is_special.first then
-            if firstTyped then
-                virt_text = { { target.char, hl.target_first_typed } }
-            else
-                virt_text = { { target.char, hl.target_first } }
-            end
+            virt_text = { { target.char, choose(stage == 0, hl.target_first, hl.target_first_typed) }}
         else
-            if firstTyped then
-                virt_text = {
-                    { target.char, hl.typed_char },
-                    { target.char, hl.rest_label },
-                }
-            else
-                virt_text = {
-                    { target.char, hl.rest_char },
-                    { target.char, hl.rest_label },
-                }
-            end
+            virt_text = {
+                { target.char, choose(stage == 0, hl.rest_char, hl.typed_char) },
+                { target.char, hl.rest_label },
+            }
         end
+    elseif stage == 0 then
+        virt_text = {
+            { target.char, hl.rest_char },
+            { displayLabels[l[2]]:rep(l[1]) .. displayLabels[l[3]], hl.rest_label },
+        }
+    elseif stage - 1 > l[1] then
+        virt_text = {
+            { target.char, hl.typed_char },
+            { displayLabels[l[2]]:rep(l[1]) .. displayLabels[l[3]], hl.typed_label },
+        }
     else
-        if firstTyped then
-            virt_text = {
-                { target.char, hl.typed_char },
-                { labelString(displayLabels, target.typedLabel), hl.typed_label },
-                { labelString(displayLabels, target.label), hl.rest_label },
-            }
-        else
-            virt_text = {
-                { target.char, hl.rest_char },
-                { labelString(displayLabels, target.label), hl.rest_label },
-            }
-        end
+        virt_text = {
+            { target.char, hl.typed_char },
+            { displayLabels[l[2]]:rep(stage - 1), hl.typed_label },
+            { displayLabels[l[2]]:rep(l[1] - stage + 1) .. displayLabels[l[3]], hl.rest_label },
+        }
     end
 
     vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
@@ -381,7 +358,7 @@ local function targetLabelLen(target, options)
             return 2
         end
     else
-        return 1 + labelLength(target.typedLabel) + labelLength(target.label)
+        return 1 + target.label[1] + 1
     end
 end
 
@@ -671,7 +648,6 @@ local function jumpToWord(options)
                 local target = sortedTargets[targetStart + i - 1]
                 target.priority = priority
                 target.label = labels[i]
-                target.typedLabel = { 0, labels[i][2] }
             end
         end
     end
@@ -743,7 +719,7 @@ local function jumpToWord(options)
 
     for _, target in ipairs(wordStartTargets) do
         if not target.hidden then
-            displayLabel(target, options, false)
+            displayLabel(target, options, 0)
         end
     end
 
@@ -778,7 +754,7 @@ local function jumpToWord(options)
     local matchCache = eqClassCache(inputChar, caseSensitive)
 
     -- find group of targets that matches input characters
-    local curTargets
+    local curTargets, curLabelChars
 
     if sensitivityChanged then
         -- sensitivityChanged => prev was case insensitive
@@ -786,26 +762,26 @@ local function jumpToWord(options)
         local oldInputCache = eqClassCache(inputChar, false)
 
         -- find targets that would've been used and filter ones that have different case
-        local newTargets = {}
         for targetsChar, targets in pairs(wordStartTargetsByChar) do
             if test(targetsChar, oldInputMatch, oldInputCache) then
+                curTargets = {}
                 for _, target in ipairs(targets) do
                     if test(target.char, inputMatch, matchCache) then
-                        table.insert(newTargets, target)
+                        table.insert(curTargets, target)
                     end
                 end
-                newTargets.labelChars = targets.labelChars
+                curLabelChars = targets.labelChars
                 break
             end
-        end
-
-        if #newTargets ~= 0 then
-          curTargets = newTargets
         end
     else
         for targetsChar, targets in pairs(wordStartTargetsByChar) do
             if test(targetsChar, inputMatch, matchCache) then
-                curTargets = targets
+                curTargets = {}
+                for _, target in ipairs(targets) do
+                    table.insert(curTargets, target)
+                end
+                curLabelChars = targets.labelChars
                 break
             end
         end
@@ -824,97 +800,59 @@ local function jumpToWord(options)
         return
     end
 
-    -- recalculate if targets are hidden.
-    -- Note: we do this only once, and not at every iterations
+    -- Recalculate which targets are hidden.
+    -- Note: we do this only once, and not at every iteration
     -- since there is no point in showing additional targets after
     -- the first label char was typed.
-    local prev = curTargets[1]
-    prev.hidden = false
+    local lastVisibleI = 1
     for i = 2, #curTargets do
+        local prev = curTargets[lastVisibleI]
         local cur = curTargets[i]
-        cur.hidden = false
         if cur.pos[1] == prev.pos[1] and cur.pos.charI <= prev.pos.charEndI then
             if prev.pos.charEndI > cur.pos.charEndI then
-                prev.hidden = true
-                prev = cur
-            else
-                cur.hidden = true
+                curTargets[lastVisibleI] = cur
             end
         else
-            prev = cur
+            lastVisibleI = lastVisibleI + 1
+            curTargets[lastVisibleI] = cur
         end
     end
 
-    do -- Remove hidden targets
-        local i = 1
-
-        -- skip visible from start
-        while i <= #curTargets do
-            local target = curTargets[i]
-            if target.hidden then
-                break
-            end
-            i = i + 1
-        end
-        local putI = i
-
-        -- move visible targets to start
-        while i <= #curTargets do
-            local target = curTargets[i]
-            if not target.hidden then
-                curTargets[putI] = target
-                putI = putI + 1
-            end
-            i = i + 1
-        end
-
-        -- remove targets past the end
-        i = #curTargets
-        while i >= putI do
-            curTargets[i] = nil
-            i = i - 1
-        end
-    end
-
-    assert(#curTargets ~= 0)
-
-    local labelChars = curTargets.labelChars
+    -- Don't remove garbage from the end of the array, just track where the end is.
+    local lastCurTarget = lastVisibleI
 
     -- find the terget to jump to, jump to that target
-    local i = 1
+    local iteration = 1
     while true do
         clear()
-        for _, target in ipairs(curTargets) do
-            displayLabel(target, options, true)
+
+        for i = 1, lastVisibleI do
+          displayLabel(curTargets[i], options, iteration)
         end
 
         vim.cmd.redraw()
         inputChar = get_input()
         if inputChar == nil then break end
 
-        local newTargets = {}
+        local lastNewTarget = 0
         local found
 
-        for _, target in ipairs(curTargets) do
-          if not target.label then
-            if test(inputChar, target.match, target.matchCache) then
-              found = target
-              break
-            end
-          else
-            if target.label[1] > 0 then
-              if inputChar == labelChars[target.label[2]] then
-                target.label[1] = target.label[1] - 1
-                target.typedLabel[1] = target.typedLabel[1] + 1
-                table.insert(newTargets, target)
-              end
-            else
-              if inputChar == labelChars[target.label[3]] then
+        for i = 1, lastCurTarget do
+            local target = curTargets[i]
+            if not target.label then
+                if test(inputChar, target.match, target.matchCache) then
+                    found = target
+                    break
+                end
+            elseif target.label[1] >= iteration then
+                if inputChar == curLabelChars[target.label[2]] then
+                    lastNewTarget = lastNewTarget + 1
+                    curTargets[lastNewTarget] = target
+                end
+            elseif inputChar == curLabelChars[target.label[3]] then
                 found = target
                 break
-              end
             end
-          end
         end
 
         if found then
@@ -922,13 +860,13 @@ local function jumpToWord(options)
             vim.fn.setpos('.', { 0, pos[1], pos[2], 0, pos.charI })
             return
         end
-        if #newTargets == 0 then
+        if lastNewTarget == 0 then
             vim.api.nvim_echo({{ 'no target', 'ErrorMsg' }}, true, {})
             return
         end
 
-        curTargets = newTargets
-        i = i + 1
+        lastCurTarget = lastNewTarget
+        iteration = iteration + 1
     end
 end
 
