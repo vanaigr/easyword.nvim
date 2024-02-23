@@ -188,6 +188,12 @@ local defaultOptions = {
         's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o',
         'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
     },
+    recover_key = nil --[[
+      a char (string) that, when pressed after the jump,
+      restarts the previous jump with the same labels and everything.
+      Use 's' if this is your key for jumping.
+      Can also use vim.api.nvim_replace_termcodes(*<C-smth>*, true, false, true)
+    ]],
     special_targets = {
         unique = false, -- treat unique targets specially (don't assign labels)
         first = true, -- true = don't display target char in label twice, use special highlight
@@ -502,12 +508,10 @@ end
 
 --- main function ---
 
-local function jumpToWord(options)
+local function collectTargets(options)
     local timer = Timer:new()
     timer:add('')
 
-    local hl = options.highlight
-    local ns = options.namespace
     local displayLabels = options.labels
     local is_special = options.special_targets
 
@@ -517,14 +521,6 @@ local function jumpToWord(options)
     local wininfo = vim.fn.getwininfo(winid)[1]
     local topLine = wininfo.topline
     local botLine = wininfo.botline
-
-    local function clear()
-        vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
-        -- For some reason, topLine and botLine are faster than 0 and last line
-        -- vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { vim.api.nvim_buf_line_count(bufId), -1 }, { }).
-        -- Also, botline doesn't include partially shown lines. So no ' - 1'.
-        vim.highlight.range(bufId, ns, hl.backdrop, { topLine-1, 0 }, { botLine, -1 }, { })
-    end
 
     local cursorPos = vim.fn.getpos('.')
     cursorPos = { cursorPos[2], cursorPos[3] }
@@ -595,11 +591,7 @@ local function jumpToWord(options)
 
     timer:add('by word')
 
-    clear()
-
-    timer:add('clear hl')
-
-    -- assign labels to groups of targets and display them
+    -- assign labels to groups of targets
     for key, targets in pairs(wordStartTargetsByChar) do
         local priority = getKeyPriority(key)
         if #targets == 1 then
@@ -717,16 +709,35 @@ local function jumpToWord(options)
 
     timer:add('remove overlap')
 
+    timer:print()
+    --print(#wordStartTargets)
+
+    return {
+      targets = wordStartTargets,
+      targetsByChar = wordStartTargetsByChar,
+      win = winid, buf = bufId,
+      topLine = topLine, botLine = botLine,
+    }
+end
+
+local function jumpToWord(options, targetsInfo)
+    local winid = targetsInfo.win
+    local bufId = targetsInfo.buf
+
+    local topLine = targetsInfo.topLine
+    local botLine = targetsInfo.botLine
+
+    local hl = options.highlight
+    local ns = options.namespace
+
+    local wordStartTargets = targetsInfo.targets
+    local wordStartTargetsByChar = targetsInfo.targetsByChar
+
     for _, target in ipairs(wordStartTargets) do
         if not target.hidden then
             displayLabel(target, options, 0)
         end
     end
-
-    timer:add('end')
-
-    timer:print()
-    --print(#wordStartTargets)
 
     vim.cmd.redraw()
     local inputChar = get_input()
@@ -824,7 +835,11 @@ local function jumpToWord(options)
     -- find the terget to jump to, jump to that target
     local iteration = 1
     while true do
-        clear()
+        vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
+        -- For some reason, topLine and botLine are faster than 0 and last line
+        -- vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { vim.api.nvim_buf_line_count(bufId), -1 }, { }).
+        -- Also, botline doesn't include partially shown lines. So no ' - 1'.
+        vim.highlight.range(bufId, ns, hl.backdrop, { topLine-1, 0 }, { botLine, -1 }, { })
 
         for i = 1, lastVisibleI do
           displayLabel(curTargets[i], options, iteration)
@@ -870,12 +885,91 @@ local function jumpToWord(options)
     end
 end
 
+local function handleJump(params)
+  local options = params[1]
+  local targets = params[2]
+
+  local ok, result = pcall(jumpToWord, options, targets)
+  vim.api.nvim_buf_clear_namespace(0, options.namespace, 0, -1)
+  vim.cmd[=[redraw!]=]
+
+  if not ok then
+    vim.api.nvim_echo({{'Error: '..vim.inspect(result), 'ErrorMsg'}}, true, {})
+    return
+  end
+
+  if options.recover_key then return true end
+end
+
+-- create unique global mapping without having globals.
+-- NOTE: at least one function must be present
+local mapping = vim.api.nvim_exec2(
+  "function s:a()\nendfun\nechon expand('<SID>')",
+  { output = true }
+).output
+
+-- See https://github.com/neovim/neovim/issues/20793
+-- TLDR: Displayed cursor is not updated if getcharstr()
+-- is called immediatley after setting the cursor.
+-- My workaround is to put getcharstr() in a mapping and execute it instead,
+-- so that the cursor has time to update before the function is used.
+
+local modes = { 'n', 'i', 'x', 's', 'c', 'o', 't', 'l' } -- are these all modes?
+-- 'v' = 'x' + 's'
+
+local recoverKeyI = 0
+
+local function feedRecoverKeyStep(params)
+  local name = mapping .. recoverKeyI
+  recoverKeyI = recoverKeyI + 1
+
+  vim.keymap.set(modes, name, function()
+    for _, mode in ipairs(modes) do vim.api.nvim_del_keymap(mode, name) end
+
+    local options = params[1]
+
+    local typed = ''
+    local key = options.recover_key
+
+    while true do
+      local ok, ch = pcall(vim.fn.getcharstr)
+      if not ok then return end
+
+      if string.sub(key, 1 + #typed, 1 + #typed + #ch-1) ~= ch then
+        vim.api.nvim_feedkeys(typed..ch, '', false)
+        return
+      end
+      if #key == #typed + #ch then break end
+      typed = typed..ch
+    end
+
+    local ok, res = pcall(handleJump, params)
+    if not ok then
+      vim.api.nvim_echo({{'Error: '..vim.inspect(res), 'ErrorMsg'}}, true, {})
+    elseif res then
+      feedRecoverKeyStep(params)
+    end
+  end)
+
+  -- I'm pretty sure this can be broken.
+  -- I encountered some issues with reading text from nvim_feedkeys() of other plugins
+  -- when doing 'getcharstr()' in a mapping in Ctrl_O in insert mode  o_o
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(name, true, false, true), '', false)
+end
+
 local function jump(opts)
     local options = createOptions(opts)
-    -- jumpToWord(options) -- if stacktrace is needed
-    local ok, result = pcall(jumpToWord, options)
-    if not ok then vim.api.nvim_echo({{'Error: '..vim.inspect(result), 'ErrorMsg'}}, true, {}) end
-    vim.api.nvim_buf_clear_namespace(0, options.namespace, 0, -1)
+
+    local ok, result = pcall(collectTargets, options)
+    if not ok then
+      vim.api.nvim_echo({{'Error: '..vim.inspect(result), 'ErrorMsg'}}, true, {})
+      return
+    end
+
+    local params = { options, result }
+    if handleJump(params) == true then
+      feedRecoverKeyStep(params)
+    end
 end
 
 applyDefaultHighlight()
