@@ -93,9 +93,9 @@ end
 local function makeCharMatch(char, caseSensitive)
   -- I hope this wouldn't need to be escaped
   -- since I have no idea how to escape it
-  if caseSensitive then 
+  if caseSensitive then
     return vim.regex('[[='..char..'=]]')
-  else 
+  else
     return vim.regex('[[='..char..'=]]\\c')
   end
 end
@@ -112,7 +112,7 @@ end
 
 --- functions for finding targets ---
 
--- v   v   v     v    v    v    
+-- v   v   v     v    v    v
 -- wordWORDWord  word_WORD WORD ==
 --                   ^          ^
 local function test_split_identifiers(chars, cur_i)
@@ -165,7 +165,7 @@ local function get_targets(bufId, topLine, botLine)
             for i, cur in ipairs(chars) do
                 if test_split_identifiers(chars, i) then
                     -- charI is for curswant and label intersection removal.
-                    -- The fact that curswant is 1-idexed and measured in characters 
+                    -- The fact that curswant is 1-idexed and measured in characters
                     -- and not bytes or screen cells is a secret (shh, don't tell anyone)
                     table.insert(targets, { char = cur, pos = { lnum, col, charI = i } })
                 end
@@ -554,7 +554,7 @@ local function jumpToWord(options)
 
     timer:add('prep')
 
-    -- find all tragets 
+    -- find all tragets
     local wordStartTargets = get_targets(bufId, topLine, botLine)
     timer:add('targets')
 
@@ -757,9 +757,9 @@ local function jumpToWord(options)
     if inputChar == nil then return end
 
     -- apply smart case
-    -- NOTE: we can only add restrictions, since we already computed 
-    -- the labels, and if we would have to join 2+ targets groups, 
-    -- the labels would collide; and label chars also wouldn't be the same 
+    -- NOTE: we can only add restrictions, since we already computed
+    -- the labels, and if we would have to join 2+ targets groups,
+    -- the labels would collide; and label chars also wouldn't be the same
     -- (would break first target, which assumes other targets don't take its character)
     local sensitivityChanged = false
     if not caseSensitive and options.smart_case then
@@ -767,7 +767,7 @@ local function jumpToWord(options)
         local lowerChar = vim.fn.tolower(inputChar)
 
         if upperChar ~= lowerChar and inputChar == upperChar
-          and canBeInputed(upperChar) and canBeInputed(lowerChar) 
+          and canBeInputed(upperChar) and canBeInputed(lowerChar)
         then
           sensitivityChanged = true
           caseSensitive = true
