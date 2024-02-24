@@ -167,7 +167,10 @@ local function get_targets(bufId, topLine, botLine)
                     -- charI is for curswant and label intersection removal.
                     -- The fact that curswant is 1-idexed and measured in characters
                     -- and not bytes or screen cells is a secret (shh, don't tell anyone)
-                    table.insert(targets, { char = cur, pos = { lnum, col, charI = i } })
+                    table.insert(targets, {
+                      line = lnum, col = col, charI = i,
+                      char = cur,
+                    })
                 end
                 col = col + string.len(cur)
             end
@@ -341,7 +344,7 @@ local function displayLabel(target, options, stage)
         }
     end
 
-    vim.api.nvim_buf_set_extmark(0, ns, target.pos[1]-1, target.pos[2]-1, {
+    vim.api.nvim_buf_set_extmark(0, ns, target.line-1, target.col-1, {
         virt_text = virt_text,
         virt_text_pos = 'overlay',
         hl_mode = 'combine',
@@ -370,13 +373,13 @@ end
 --- functions for assigning labels to targets ---
 
 --- index of first target >= position
-local function findPosition(targets, position)
+local function findPosition(targets, line, col)
     local begin = 1
     local en = #targets + 1
     while begin < en do
         local m = begin + bit.rshift(en - begin, 1)
         local v = targets[m]
-        if v.pos[1] < position[1] or (v.pos[1] == position[1] and v.pos[2] < position[2]) then
+        if v.line < line or (v.line == line and v.col < col) then
             begin = m + 1
         else
             en = m
@@ -389,9 +392,9 @@ end
 --- interleave lines with targets above and below cursor, reverse order on line for lines above.
 --- First mark will always be next after cursor, second is previous before the cursor.
 --- Input must be sorted by lines and then columns (increasing)
-local function sortTargets(cursorPos, targets)
+local function sortTargets(targets, cursorLine, cursorCol)
     -- may be outside range
-    local nextI = findPosition(targets, cursorPos)
+    local nextI = findPosition(targets, cursorLine, cursorCol)
     local prevI = nextI - 1
 
     local sortedTargets = {}
@@ -404,14 +407,14 @@ local function sortTargets(cursorPos, targets)
         local curT = targets[nextI]
         nextI = nextI + 1
         table.insert(sortedTargets, curT)
-        afterLineI = curT.pos[1]
+        afterLineI = curT.line
     end
 
     if prevI >= 1 then
         local curT = targets[prevI]
         prevI = prevI - 1
         table.insert(sortedTargets, curT)
-        beforeLineI = curT.pos[1]
+        beforeLineI = curT.line
     end
 
     -- sort by lines
@@ -421,11 +424,11 @@ local function sortTargets(cursorPos, targets)
         while nextI <= #targets do
             continue = true
             local curT = targets[nextI]
-            if curT.pos[1] == afterLineI then
+            if curT.line == afterLineI then
                 table.insert(sortedTargets, curT)
                 nextI = nextI + 1
             else
-                afterLineI = curT.pos[1]
+                afterLineI = curT.line
                 break
             end
         end
@@ -433,11 +436,11 @@ local function sortTargets(cursorPos, targets)
         while prevI >= 1 do
             continue = true
             local curT = targets[prevI]
-            if curT.pos[1] == beforeLineI then
+            if curT.line == beforeLineI then
                 table.insert(sortedTargets, curT)
                 prevI = prevI - 1
             else
-                beforeLineI = curT.pos[1]
+                beforeLineI = curT.line
                 break
             end
         end
@@ -510,7 +513,7 @@ local function collectTargets(options)
     local botLine = wininfo.botline
 
     local cursorPos = vim.fn.getpos('.')
-    cursorPos = { cursorPos[2], cursorPos[3] }
+    local cursorLine, cursorCol = cursorPos[2], cursorPos[3]
 
     --timer:add('prep')
 
@@ -525,11 +528,11 @@ local function collectTargets(options)
 
     -- remove targets at cursor position
     do
-        local startI = findPosition(wordStartTargets, cursorPos)
+        local startI = findPosition(wordStartTargets, cursorLine, cursorCol)
         local enI = startI
         while enI <= #wordStartTargets do
             local t = wordStartTargets[enI]
-            if t.pos[1] == cursorPos[1] and t.pos[2] == cursorPos[2] then
+            if t.line == cursorLine and t.col == cursorCol then
                 enI = enI + 1
             else
                 break
@@ -595,7 +598,7 @@ local function collectTargets(options)
             local labelChars = options:get_typed_labels(key)
             targets.labelChars = labelChars
 
-            local sortedTargets = sortTargets(cursorPos, targets)
+            local sortedTargets = sortTargets(targets, cursorLine, cursorCol)
             local labelCharsI = {}
 
             -- first target is special, its label is the key itself
@@ -643,15 +646,15 @@ local function collectTargets(options)
         local prev
         -- Compute end bound (inclusive). Assumes all chars are length 1
         for i, t in ipairs(wordStartTargets) do
-            local start = t.pos.charI
-            t.pos.charEndI = t.pos.charI + targetLabelLen(t, options) - 1
+            local start = t.charI
+            t.charEndI = t.charI + targetLabelLen(t, options) - 1
 
             -- don't show labels on leading whitespace yet (ugly)
-            if t.priority == 0 and t.pos.charI == 1 then t.hidden = true
+            if t.priority == 0 and t.charI == 1 then t.hidden = true
             elseif t.priority == 2 then -- and t is not hidden
                 -- remove intersecting at highest stage (since we're iterating them anyway)
-                if prev and t.pos[1] == prev.pos[1] and t.pos.charI <= prev.pos.charEndI then
-                    if prev.pos.charEndI > cur.pos.charEndI then
+                if prev and t.line == prev.line and t.charI <= prev.charEndI then
+                    if prev.charEndI > cur.charEndI then
                         prev.hidden = true
                         prev = cur
                     else
@@ -677,9 +680,9 @@ local function collectTargets(options)
             while i <= #wordStartTargets do
                 local cur = wordStartTargets[i]
                 if not cur.hidden and cur.priority >= stage then
-                    if cur.pos[1] == prev.pos[1] and cur.pos.charI <= prev.pos.charEndI then
+                    if cur.line == prev.line and cur.charI <= prev.charEndI then
                         -- it's better to keep prev if priorities are equal and it stops at same column?
-                        if prev.priority < cur.priority or prev.pos.charEndI > cur.pos.charEndI then
+                        if prev.priority < cur.priority or prev.charEndI > cur.charEndI then
                             prev.hidden = true
                             prev = cur
                         else
@@ -797,8 +800,7 @@ local function jumpToWord(options, targetsInfo)
     -- note: only if target was unique before (not if it became unique after smart case
     -- since that would be unexpected)
     if options.special_targets.unique and curTargets[1].unique then
-        local pos = curTargets[1].pos
-        vim.fn.setpos('.', { 0, pos[1], pos[2], 0, pos.charI })
+        vim.fn.setpos('.', { 0, target.line, target.col, 0, target.charI })
         return
     end
 
@@ -810,8 +812,8 @@ local function jumpToWord(options, targetsInfo)
     for i = 2, #curTargets do
         local prev = curTargets[lastVisibleI]
         local cur = curTargets[i]
-        if cur.pos[1] == prev.pos[1] and cur.pos.charI <= prev.pos.charEndI then
-            if not cur.hidden or (prev.hidden and prev.pos.charEndI > cur.pos.charEndI) then
+        if cur.line == prev.line and cur.charI <= prev.charEndI then
+            if not cur.hidden or (prev.hidden and prev.charEndI > cur.charEndI) then
                 curTargets[lastVisibleI] = cur
             end
         else
@@ -862,8 +864,7 @@ local function jumpToWord(options, targetsInfo)
         end
 
         if found then
-            local pos = found.pos
-            vim.fn.setpos('.', { 0, pos[1], pos[2], 0, pos.charI })
+            vim.fn.setpos('.', { 0, found.line, found.col, 0, found.charI })
             return
         end
         if lastNewTarget == 0 then
