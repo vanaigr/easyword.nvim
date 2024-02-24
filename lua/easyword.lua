@@ -345,9 +345,7 @@ local function displayLabel(target, options, stage)
     end
 
     vim.api.nvim_buf_set_extmark(0, ns, target.line-1, target.col-1, {
-        virt_text = virt_text,
-        virt_text_pos = 'overlay',
-        hl_mode = 'combine',
+      virt_text = virt_text, virt_text_pos = 'overlay', priority = 65535,
     })
 end
 
@@ -722,6 +720,22 @@ local function jumpToWord(options, targetsInfo)
     local wordStartTargets = targetsInfo.targets
     local wordStartTargetsByChar = targetsInfo.targetsByChar
 
+    local topStart = { topLine-1, 0 }
+    local botEnd = { botLine, -1 }
+    local bgOptions = { priority = 65534 }
+    local ns = options.namespace
+    local backdrop = options.highlight.backdrop
+    local function applyBg()
+        -- For some reason, topLine and botLine are faster than 0 and last line
+         --vim.highlight.range(bufId, ns, backdrop, { 0, 0 }, { vim.api.nvim_buf_line_count(bufId), -1 }, { }).
+        -- Also, botline doesn't include partially shown lines. So no ' - 1'.
+        -- Note: doesn't work with hlsearch, the pattern is still above :/
+        -- neovim/neovim#22361 might be related
+        vim.highlight.range(bufId, ns, backdrop, topStart, botEnd, bgOptions)
+    end
+
+    applyBg()
+
     --local t = Timer:new()
     --t:add('')
 
@@ -829,10 +843,7 @@ local function jumpToWord(options, targetsInfo)
     local iteration = 1
     while true do
         vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
-        -- For some reason, topLine and botLine are faster than 0 and last line
-        -- vim.highlight.range(bufId, ns, hl.backdrop, { 0, 0 }, { vim.api.nvim_buf_line_count(bufId), -1 }, { }).
-        -- Also, botline doesn't include partially shown lines. So no ' - 1'.
-        vim.highlight.range(bufId, ns, hl.backdrop, { topLine-1, 0 }, { botLine, -1 }, { })
+        applyBg()
 
         for i = 1, lastVisibleI do
           displayLabel(curTargets[i], options, iteration)
