@@ -184,10 +184,13 @@ end
 local defaultOptions = {
     case_sensitive = false,
     smart_case = true,
-    labels = { -- must be all unique and 1 cell wide. At lest 2
+    labels = { -- must be all unique and 1 cell wide. #labels >= 2
         's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o',
         'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
     },
+    get_typed_labels = function(self, char)
+        return self.labels -- must be same length as self.labels
+    end,
     recover_key = nil --[[
       a char (string) that, when pressed after the jump,
       restarts the previous jump with the same labels and everything.
@@ -210,10 +213,6 @@ local defaultOptions = {
     },
     namespace = vim.api.nvim_create_namespace('Easyword'),
 }
-
-function defaultOptions:get_typed_labels(char)
-  return self.labels -- must be same length as self.labels
-end
 
 local function createOptions(opts)
     if opts == nil then return defaultOptions
@@ -474,43 +473,31 @@ end
 --- measurements ---
 
 local Timer = {}
-
-if false then
-  Timer.__index = Timer
-  function Timer:new()
-    local o = {}
-    setmetatable(o, Timer)
-    return o
-  end
-  function Timer:add(name)
-    table.insert(self, { vim.loop.hrtime(), name })
-  end
-  function Timer:print()
-    local prev
-    print(' ')
-    for _, data in ipairs(self) do
-      if prev then
-        print(data[2], vim.fn.round((data[1] - prev[1]) / 1000) / 1000)
-      end
-      prev = data
+Timer.__index = Timer
+function Timer:new()
+  local o = {}
+  setmetatable(o, Timer)
+  return o
+end
+function Timer:add(name)
+  table.insert(self, { vim.loop.hrtime(), name })
+end
+function Timer:print()
+  local prev
+  print(' ')
+  for _, data in ipairs(self) do
+    if prev then
+      print(data[2], vim.fn.round((data[1] - prev[1]) / 1000) / 1000)
     end
+    prev = data
   end
-else
-  Timer.__index = Timer
-  function Timer:new()
-    local o = {}
-    setmetatable(o, Timer)
-    return o
-  end
-  function Timer:add(name) end
-  function Timer:print() end
 end
 
 --- main function ---
 
 local function collectTargets(options)
-    local timer = Timer:new()
-    timer:add('')
+    --local timer = Timer:new()
+    --timer:add('')
 
     local displayLabels = options.labels
     local is_special = options.special_targets
@@ -525,11 +512,11 @@ local function collectTargets(options)
     local cursorPos = vim.fn.getpos('.')
     cursorPos = { cursorPos[2], cursorPos[3] }
 
-    timer:add('prep')
+    --timer:add('prep')
 
     -- find all tragets
     local wordStartTargets = get_targets(bufId, topLine, botLine)
-    timer:add('targets')
+    --timer:add('targets')
 
     if #wordStartTargets == 0 then
         vim.api.nvim_echo({{ 'no targets', 'ErrorMsg' }}, true, {})
@@ -560,7 +547,7 @@ local function collectTargets(options)
         end
     end
 
-    timer:add('remove at cursor')
+    --timer:add('remove at cursor')
 
     local caseSensitive = toBoolean(options.case_sensitive)
 
@@ -589,7 +576,7 @@ local function collectTargets(options)
         table.insert(curData, target)
     end
 
-    timer:add('by word')
+    --timer:add('by word')
 
     -- assign labels to groups of targets
     for key, targets in pairs(wordStartTargetsByChar) do
@@ -644,7 +631,7 @@ local function collectTargets(options)
         end
     end
 
-    timer:add('labels')
+    --timer:add('labels')
 
     -- remove targets with intersecting labels
     -- TODO: reassign labels? (should all be shorter than before)
@@ -707,9 +694,8 @@ local function collectTargets(options)
         end
     end
 
-    timer:add('remove overlap')
-
-    timer:print()
+    --timer:add('remove overlap')
+    --timer:print()
     --print(#wordStartTargets)
 
     return {
@@ -733,11 +719,16 @@ local function jumpToWord(options, targetsInfo)
     local wordStartTargets = targetsInfo.targets
     local wordStartTargetsByChar = targetsInfo.targetsByChar
 
+    --local t = Timer:new()
+    --t:add('')
+
     for _, target in ipairs(wordStartTargets) do
         if not target.hidden then
             displayLabel(target, options, 0)
         end
     end
+    --t:add('targets')
+    --t:print()
 
     vim.cmd.redraw()
     local inputChar = get_input()
