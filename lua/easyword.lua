@@ -66,26 +66,30 @@ function canBeInputed(str)
 end
 
 local function splitByChars(str)
+    if #str == 0 then return {} end
+
     local result = {}
     local i = 1
+    local byte = string.byte(str, i)
+    if byte < 128 then
+        while true do
+            local nextByte -- next can be composing
+            if i + 1 <= #str then
+                nextByte = string.byte(str, i + 1)
+                if nextByte >= 128 then break end
+            end
 
-    -- why are regular expressions so slow
-    -- why isn't there a faster version of a function
-    -- that splits a string into characters ?????
-    while i <= #str do
-        local byte = string.byte(str, i)
-        if byte < 128 then -- ascii
-           table.insert(result, string.char(byte))
+            table.insert(result, string.char(byte))
+            byte = nextByte
             i = i + 1
-        else
-            break
+            if not nextByte then
+                return result
+            end
         end
     end
 
-    if i <= #str then
-        local result2 = vim.fn.split(str:sub(i), '\\zs')
-        vim.list_extend(result, result2)
-    end
+    local result2 = vim.fn.split(str:sub(i), '\\zs')
+    vim.list_extend(result, result2)
 
     return result
 end
@@ -226,7 +230,7 @@ local function applyDefaultHighlight(opts)
     local options = createOptions(opts)
     vim.api.nvim_set_hl(0, options.highlight.backdrop, { link = 'Comment' })
 
-    vim.api.nvim_set_hl(0, options.highlight.typed_char, { sp = 'red', underline = true, bold = true })
+    vim.api.nvim_set_hl(0, options.highlight.typed_char, { fg = 'grey', sp = 'red', underline = true, bold = true })
     vim.api.nvim_set_hl(0, options.highlight.rest_char, { fg = 'grey', sp='grey', underline = true, bold = true })
 
     vim.api.nvim_set_hl(0, options.highlight.unique, { bg = 'white', fg = 'black', bold = true })
