@@ -21,10 +21,9 @@ end
 --- patterns and functions for testing if a character should be considered a target ---
 
 local patterns = {
-    upper = { match = vim.regex('[[:upper:]]'), cache = {} },
-    lower = { match = vim.regex('[[:lower:]]'), cache = {} },
-    digit = { match = vim.regex('[[:digit:]]'), cache = {} },
-    word  = { match = vim.regex('[[:upper:][:lower:][:digit:]]'), cache = {} },
+    upper = { match = vim.regex('^[[:upper:]]$'), cache = {} },
+    lower = { match = vim.regex('^[[:lower:]]$'), cache = {} },
+    digit = { match = vim.regex('^[[:digit:]]$'), cache = {} },
 }
 
 local equivalenceCache = { {}, {} } -- { case insensitive, case sensitive }
@@ -98,9 +97,9 @@ local function makeCharMatch(char, caseSensitive)
   -- I hope this wouldn't need to be escaped
   -- since I have no idea how to escape it
   if caseSensitive then
-    return vim.regex('[[='..char..'=]]')
+    return vim.regex('^[[='..char..'=]]$')
   else
-    return vim.regex('[[='..char..'=]]\\c')
+    return vim.regex('^[[='..char..'=]]\\c$')
   end
 end
 
@@ -127,7 +126,6 @@ local function test_split_identifiers(chars, cur_i)
     local up = patterns.upper
     local lo = patterns.lower
     local digit = patterns.digit
-    local word = patterns.word
 
     if test(cur_char, up.match, up.cache) then
         local prev_char = chars[cur_i - 1]
@@ -142,8 +140,8 @@ local function test_split_identifiers(chars, cur_i)
         is_match = not test(chars[cur_i-1], digit.match, digit.cache)
     elseif test(cur_char, lo.match, lo.cache) then
         local prev_char = chars[cur_i - 1]
-        is_match = test(prev_char, digit.match, digit.cache)
-            or not test(prev_char, word.match, word.cache)
+        is_match = not test(prev_char, up.match, up.cache)
+            and not test(prev_char, lo.match, lo.cache)
     else
         local prev_char = chars[cur_i - 1]
         is_match = prev_char ~= cur_char -- matching only first character in ==, [[ and ]]
@@ -468,7 +466,13 @@ end
 local function getKeyPriority(key)
     if key == ' ' or key == '\t' then
         return 0
-    elseif test(key, patterns.word.match, patterns.word.cache) then
+    end
+
+    local u = patterns.upper
+    local l = patterns.lower
+    local d = patterns.digit
+
+    if test(key, u.match, u.cache) or test(key, l.match, l.cache) or test(key, d.match, d.cache) then
         return 2
     else
         return 1
