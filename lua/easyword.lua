@@ -2,7 +2,11 @@ local vim = vim
 local unpack = table.unpack or unpack
 
 local bit = require('bit')
---local function pcall(f, ...) return true, f(...) end -- debug
+
+local debug = false
+if debug then
+    local function pcall(f, ...) return true, f(...) end
+end
 
 local function replace_keycodes(s)
     return vim.api.nvim_replace_termcodes(s, true, false, true)
@@ -493,8 +497,8 @@ end
 --- main function ---
 
 local function collectTargets(options)
-    --local timer = Timer:new()
-    --timer:add('')
+    local timer
+    if debug then timer = Timer:new(); timer:add('') end
 
     local is_special = options.special_targets
 
@@ -508,11 +512,11 @@ local function collectTargets(options)
     local cursorPos = vim.fn.getpos('.')
     local cursorLine, cursorCol = cursorPos[2], cursorPos[3]
 
-    --timer:add('prep')
+    if debug then timer:add('prep') end
 
     -- find all tragets
     local wordStartTargets = get_targets(bufId, topLine, botLine)
-    --timer:add('targets')
+    if debug then timer:add('targets') end
 
     if #wordStartTargets == 0 then
         vim.api.nvim_echo({{ 'no targets', 'ErrorMsg' }}, true, {})
@@ -543,7 +547,7 @@ local function collectTargets(options)
         end
     end
 
-    --timer:add('remove at cursor')
+    if debug then timer:add('remove at cursor') end
 
     local caseSensitive = toBoolean(options.case_sensitive)
 
@@ -564,7 +568,7 @@ local function collectTargets(options)
         end
     end
 
-    --timer:add('by word')
+    if debug then timer:add('by word') end
 
     -- assign labels to groups of targets
     for charN, targets in pairs(wordStartTargetsByChar) do
@@ -653,7 +657,7 @@ local function collectTargets(options)
         end
     end
 
-    --timer:add('labels')
+    if debug then timer:add('labels') end
 
     -- remove targets with intersecting labels
     -- TODO: reassign labels? (should all be shorter than before)
@@ -716,9 +720,7 @@ local function collectTargets(options)
         end
     end
 
-    --timer:add('remove overlap')
-    --timer:print()
-    --print(#wordStartTargets)
+    if debug then timer:add('remove overlap'); timer:print(); print(#wordStartTargets) end
 
     return {
       targets = wordStartTargets,
@@ -757,16 +759,16 @@ local function jumpToWord(options, targetsInfo)
 
     applyBg()
 
-    --local t = Timer:new()
-    --t:add('')
+    local t
+    if debug then t = Timer:new(); t:add('') end
 
     for _, target in ipairs(wordStartTargets) do
         if not target.hidden then
             displayLabel(target, options, 0)
         end
     end
-    --t:add('targets')
-    --t:print()
+
+    if debug then t:add('targets'); t:print() end
 
     vim.cmd.redraw()
     local inputChar = get_input()
