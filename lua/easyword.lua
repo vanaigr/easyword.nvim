@@ -447,63 +447,7 @@ end
 --- interleave lines with targets above and below cursor, reverse order on line for lines above.
 --- First mark will always be next after cursor, second is previous before the cursor.
 --- Input must be sorted by lines and then columns (increasing)
-local function sortTargets(targets, cursorLine, cursorCol)
-    -- may be outside range
-    local nextI = findPosition(targets, cursorLine, cursorCol)
-    local prevI = nextI - 1
-
-    local sortedTargets = {}
-
-    local afterLineI
-    local beforeLineI
-
-    -- add first labels
-    if nextI <= #targets then
-        local curT = targets[nextI]
-        nextI = nextI + 1
-        table.insert(sortedTargets, curT)
-        afterLineI = curT.line
-    end
-
-    if prevI >= 1 then
-        local curT = targets[prevI]
-        prevI = prevI - 1
-        table.insert(sortedTargets, curT)
-        beforeLineI = curT.line
-    end
-
-    -- sort by lines
-    -- note: can be unbalanced
-    while true do
-        local continue = false
-        while nextI <= #targets do
-            continue = true
-            local curT = targets[nextI]
-            if curT.line == afterLineI then
-                table.insert(sortedTargets, curT)
-                nextI = nextI + 1
-            else
-                afterLineI = curT.line
-                break
-            end
-        end
-
-        while prevI >= 1 do
-            continue = true
-            local curT = targets[prevI]
-            if curT.line == beforeLineI then
-                table.insert(sortedTargets, curT)
-                prevI = prevI - 1
-            else
-                beforeLineI = curT.line
-                break
-            end
-        end
-
-        if not continue then break end
-    end
-
-    return sortedTargets
+local function sortTargets(targets, cursorLine, cursorCol, output)
 end
 
 -- more priority == more important
@@ -625,6 +569,7 @@ local function collectTargets(options)
     -- assign labels to groups of targets
     for charN, targets in pairs(wordStartTargetsByChar) do
         local priority = getKeyPriority(charN)
+        assert(#targets > 0)
         if #targets == 1 then
             local target = targets[1]
             target.priority = priority -- maybe prioritize uniquie more if word chars?
@@ -637,31 +582,73 @@ local function collectTargets(options)
         else
             targets.labelChars = options.normalizedLabels
 
-            local sortedTargets = sortTargets(targets, cursorLine, cursorCol)
-            local labelCharsI = {}
+            -- either one may be outside range
+            local nextI = findPosition(targets, cursorLine, cursorCol)
+            local prevI = nextI - 1
+
+            local beforeLineI, afterLineI
+
+            local first
+            if nextI <= #targets then
+                first = targets[nextI]
+                nextI = nextI + 1
+                afterLineI = first.line
+            end
+            if prevI >= 1 then
+                local curT = targets[prevI]
+                if not first then
+                    first = curT
+                    prevI = prevI - 1
+                end
+                beforeLineI = curTline
+            end
+            assert(first ~= nil)
 
             -- first target is special, its label is the key itself (normalized)
-            local first = sortedTargets[1]
-            local targetStart = 1
-            if first then
-                targetStart = 2
-                first.label = nil
-                first.priority = priority
+            first.label = nil
+            first.priority = priority
 
-                for i, v in ipairs(options.normalizedLabels) do
-                    if charN ~= v then table.insert(labelCharsI, i) end
-                end
-            else
-                for i = 1, #labelChars do
-                    table.insert(labelCharsI, i)
-                end
+            local labelCharsI = {}
+            for i, v in ipairs(options.normalizedLabels) do
+                if charN ~= v then table.insert(labelCharsI, i) end
             end
+            local labels = computeLabels(labelCharsI, #targets - 1)
+            local labelsI = 1
 
-            local labels = computeLabels(labelCharsI, #targets - targetStart + 1)
-            for i = 1, #targets - targetStart + 1 do
-                local target = sortedTargets[targetStart + i - 1]
-                target.priority = priority
-                target.label = labels[i]
+            -- sort by lines
+            -- note: can be unbalanced
+            local labelsI = 1
+            while true do
+                local continue = false
+                while nextI <= #targets do
+                    continue = true
+                    local curT = targets[nextI]
+                    if curT.line == afterLineI then
+                        curT.priority = priority
+                        curT.label = labels[labelsI]
+                        labelsI = labelsI + 1
+                        nextI = nextI + 1
+                    else
+                        afterLineI = curT.line
+                        break
+                    end
+                end
+
+                while prevI >= 1 do
+                    continue = true
+                    local curT = targets[prevI]
+                    if curT.line == beforeLineI then
+                        curT.priority = priority
+                        curT.label = labels[labelsI]
+                        labelsI = labelsI + 1
+                        prevI = prevI - 1
+                    else
+                        beforeLineI = curT.line
+                        break
+                    end
+                end
+
+                if not continue then break end
             end
         end
     end
