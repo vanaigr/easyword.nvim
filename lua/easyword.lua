@@ -186,16 +186,16 @@ end
 
 --- options ---
 
+local defaultLabels = {
+    's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o',
+    'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
+}
+
 local defaultOptions = {
     case_sensitive = false,
     smart_case = true,
-    labels = { -- must be all unique and 1 cell wide. #labels >= 2
-        's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o',
-        'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
-    },
-    get_typed_labels = function(self, char)
-        return self.labels -- must be same length as self.labels
-    end,
+    labels = defaultLabels,  -- must be all unique and 1 cell wide. #labels >= 2
+    get_typed_labels = function(char) return defaultLabels end, -- must be same length as self.labels
     recover_key = nil --[[
       a char (string) that, when pressed after the jump,
       restarts the previous jump with the same labels and everything.
@@ -220,8 +220,39 @@ local defaultOptions = {
 }
 
 local function createOptions(opts)
-    if opts == nil then return defaultOptions
-    else return vim.tbl_deep_extend('keep', opts, defaultOptions) end
+    if opts == nil then return defaultOptions end
+    local result = {}
+
+    result.case_sensitive = toBoolean(opts.case_sensitive)
+    result.smart_case = toBoolean(opts.smart_case)
+    result.recover_key = opts.recover_key
+    result.namespace = opts.namespace or defaultOptions.namespace
+
+    local tl = opts.get_typed_labels
+    if tl then
+        local l = opts.labels
+        assert(l ~= nil)
+        result.labels = vim.list_extend({}, opts.labels)
+        result.get_typed_labels = tl
+    else
+        result.labels = defaultOptions.labels
+        result.get_typed_labels = defaultOptions.get_typed_labels
+    end
+
+    local t = opts.special_targets
+    if t then
+        result.special_targets = { unique = toBoolean(t.unique), first = toBoolean(t.first) }
+    else
+        result.special_targets = defaultOptions.special_targets
+    end
+
+    result.highlight = {}
+    for k, v in pairs(defaultOptions.highlight) do
+        local ov = opts[k]
+        result.highlight[k] = ov or v
+    end
+
+    return result
 end
 
 local function applyDefaultHighlight(opts)
@@ -596,12 +627,12 @@ local function collectTargets(options)
             if is_special.unique then
                 setUniqueTargetLabel(target)
             else
-                local labels = options:get_typed_labels(key)
+                local labels = options.get_typed_labels(key)
                 targets.labelChars = labels
                 setFirstTargetLabel(target)
             end
         else
-            local labelChars = options:get_typed_labels(key)
+            local labelChars = options.get_typed_labels(key)
             targets.labelChars = labelChars
 
             local sortedTargets = sortTargets(targets, cursorLine, cursorCol)

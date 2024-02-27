@@ -1,12 +1,10 @@
-# WIP
-Prototype that demonstates how [leap-by-word](https://github.com/Sleepful/leap-by-word.nvim)
-could've worked if it was possible to add searching logic to custom targets in 
-[Leap.nvim](https://github.com/ggandor/leap.nvim)
-
 # Usage
 
 ```lua
-vim.keymap.set({ 'n', 'x', 'o' }, 's', function()
-    require('nvim-easyword').jump()
+vim.keymap.set('n', 's', function()
+    require('easyword').jump({ recover_key = 's' })
+end)
+vim.keymap.set({ 'x', 'o' }, 'x', function()
+    require('easyword').jump({ recover_key = 'x' })
 end)
 ```
