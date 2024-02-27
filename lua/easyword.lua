@@ -2,6 +2,7 @@ local vim = vim
 local unpack = table.unpack or unpack
 
 local bit = require('bit')
+--local function pcall(f, ...) return true, f(...) end -- debug
 
 local function replace_keycodes(s)
     return vim.api.nvim_replace_termcodes(s, true, false, true)
@@ -25,8 +26,6 @@ local patterns = {
     lower = { match = vim.regex('^[[:lower:]]$'), cache = {} },
     digit = { match = vim.regex('^[[:digit:]]$'), cache = {} },
 }
-
-local equivalenceCache = { {}, {} } -- { case insensitive, case sensitive }
 
 -- populate caches
 for i = 0, 127 do
@@ -93,26 +92,6 @@ local function splitByChars(str)
     return result
 end
 
-local function makeCharMatch(char, caseSensitive)
-  -- I hope this wouldn't need to be escaped
-  -- since I have no idea how to escape it
-  if caseSensitive then
-    return vim.regex('^[[='..char..'=]]$')
-  else
-    return vim.regex('^[[='..char..'=]]\\c$')
-  end
-end
-
-local function eqClassCache(char, caseSensitive)
-    local cacheType = equivalenceCache[caseSensitive and 2 or 1]
-    local cache = cacheType[char]
-    if not cache then
-      cache = {}
-      cacheType[char] = cache
-    end
-    return cache
-end
-
 --- functions for finding targets ---
 
 -- v   v   v     v    v    v
@@ -123,11 +102,16 @@ local function test_split_identifiers(chars, cur_i)
 
     local is_match = false
 
-    local up = patterns.upper
+    -- TODO: replace by category instead of 3 individual tests
     local lo = patterns.lower
+    local up = patterns.upper
     local digit = patterns.digit
 
-    if test(cur_char, up.match, up.cache) then
+    if test(cur_char, lo.match, lo.cache) then
+        local prev_char = chars[cur_i - 1]
+        is_match = not test(prev_char, up.match, up.cache)
+            and not test(prev_char, lo.match, lo.cache)
+    elseif test(cur_char, up.match, up.cache) then
         local prev_char = chars[cur_i - 1]
         if not test(prev_char, up.match, up.cache) then
             is_match = true
@@ -138,10 +122,6 @@ local function test_split_identifiers(chars, cur_i)
         end
     elseif test(cur_char, digit.match, digit.cache) then
         is_match = not test(chars[cur_i-1], digit.match, digit.cache)
-    elseif test(cur_char, lo.match, lo.cache) then
-        local prev_char = chars[cur_i - 1]
-        is_match = not test(prev_char, up.match, up.cache)
-            and not test(prev_char, lo.match, lo.cache)
     else
         local prev_char = chars[cur_i - 1]
         is_match = prev_char ~= cur_char -- matching only first character in ==, [[ and ]]
@@ -169,10 +149,7 @@ local function get_targets(bufId, topLine, botLine)
                     -- charI is for curswant and label intersection removal.
                     -- The fact that curswant is 1-idexed and measured in characters
                     -- and not bytes or screen cells is a secret (shh, don't tell anyone)
-                    table.insert(targets, {
-                      line = lnum, col = col, charI = i,
-                      char = cur,
-                    })
+                    table.insert(targets, { line = lnum, col = col, charI = i, char = cur })
                 end
                 col = col + string.len(cur)
             end
@@ -186,16 +163,54 @@ end
 
 --- options ---
 
+local defaultCharNormalize
+do
+  local normCache = {}
+  local chars = {}
+  for i = 1, 64 do
+    local ch = string.char(i)
+    chars[ch] =  vim.regex('^[[='..ch..'=]]\\c$')
+    normCache[ch] = ch
+  end
+  for i = 91, 127 do
+    local ch = string.char(i)
+    chars[ch] = vim.regex('^[[='..ch..'=]]\\c$')
+    normCache[ch] = ch
+  end
+
+
+  for i = 0, 25 do -- A-Z => a-z
+    normCache[string.char(65 + i)] = string.char(97 + i)
+  end
+
+  defaultCharNormalize = function(char)
+      local v = normCache[char]
+      if v then return v end
+
+      for k, pattern in pairs(chars) do
+          if pattern:match_str(char) then
+              normCache[char] = k
+              return k
+          end
+      end
+
+      chars[char] = vim.regex('^[[='..char..'=]]\\c$')
+      normCache[char] = char
+      return char
+  end
+end
+
 local defaultLabels = {
     's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o',
     'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
 }
+local defaultNormalizedLabels = defaultLabels
 
 local defaultOptions = {
-    case_sensitive = false,
-    smart_case = true,
-    labels = defaultLabels,  -- must be all unique and 1 cell wide. #labels >= 2
-    get_typed_labels = function(char) return defaultLabels end, -- must be same length as self.labels
+    -- must be all unique and 1 cell wide. #labels >= 2
+    labels = defaultLabels,
+    normalizedLabels = defaultNormalizedLabels,
+    char_normalize = defaultCharNormalize,
     recover_key = nil --[[
       a char (string) that, when pressed after the jump,
       restarts the previous jump with the same labels and everything.
@@ -223,20 +238,25 @@ local function createOptions(opts)
     if opts == nil then return defaultOptions end
     local result = {}
 
-    result.case_sensitive = toBoolean(opts.case_sensitive)
-    result.smart_case = toBoolean(opts.smart_case)
     result.recover_key = opts.recover_key
     result.namespace = opts.namespace or defaultOptions.namespace
+    result.char_normalize = opts.char_normalize or defaultOptions.char_normalize
 
-    local tl = opts.get_typed_labels
-    if tl then
-        local l = opts.labels
-        assert(l ~= nil)
-        result.labels = vim.list_extend({}, opts.labels)
-        result.get_typed_labels = tl
+    local l = opts.labels
+    if l then -- TODO: also add normalized labels into options
+        result.labels = vim.list_extend({}, l)
     else
-        result.labels = defaultOptions.labels
-        result.get_typed_labels = defaultOptions.get_typed_labels
+        result.labels = defaultLabels
+    end
+
+    -- TODO: check if normalized targets are different
+    if result.char_normalize == defaultOptions.char_normalize then
+        result.normalizedLabels = defaultNormalizedLabels
+    else
+        result.normalizedLabels = {}
+        for k, v in ipairs(result.labels) do
+            result.normalizedLabels[k] = result.char_normalize(v)
+        end
     end
 
     local t = opts.special_targets
@@ -246,10 +266,14 @@ local function createOptions(opts)
         result.special_targets = defaultOptions.special_targets
     end
 
-    result.highlight = {}
-    for k, v in pairs(defaultOptions.highlight) do
-        local ov = opts[k]
-        result.highlight[k] = ov or v
+    local hl = opts.highlight
+    if hl then
+      result.highlight = {}
+      for k, v in pairs(defaultOptions.highlight) do
+          result.highlight[k] = hl[k] or v
+      end
+    else
+      result.highlight = defaultOptions.highlight
     end
 
     return result
@@ -482,17 +506,6 @@ local function sortTargets(targets, cursorLine, cursorCol)
     return sortedTargets
 end
 
-local function setFirstTargetLabel(target, caseSensitive)
-    target.label = nil
-    target.match = makeCharMatch(target.char, caseSensitive)
-    target.matchCache = eqClassCache(target.char, caseSensitive)
-end
-
-local function setUniqueTargetLabel(target)
-  target.label = nil
-  target.unique = true
-end
-
 -- more priority == more important
 local function getKeyPriority(key)
     if key == ' ' or key == '\t' then
@@ -539,11 +552,10 @@ local function collectTargets(options)
     --local timer = Timer:new()
     --timer:add('')
 
-    local displayLabels = options.labels
     local is_special = options.special_targets
 
     local winid = vim.api.nvim_get_current_win()
-    local bufId = vim.api.nvim_win_get_buf(winid)
+    local bufId = vim.api.nvim_get_current_buf()
 
     local wininfo = vim.fn.getwininfo(winid)[1]
     local topLine = wininfo.topline
@@ -595,66 +607,49 @@ local function collectTargets(options)
     -- Targets are kept in the same order
     local wordStartTargetsByChar = {}
     for _, target in ipairs(wordStartTargets) do
-        local tChar = target.char
-
-        local curData = wordStartTargetsByChar[tChar]
-        if not curData then
-            local match = makeCharMatch(tChar, caseSensitive)
-            local cache = eqClassCache(tChar, caseSensitive)
-
-            for char, data in pairs(wordStartTargetsByChar) do
-                if test(char, match, cache) then
-                    curData = data
-                    break
-                end
+        local charN = options.char_normalize(target.char)
+        if charN then
+            local curData = wordStartTargetsByChar[charN]
+            if not curData then
+                curData = {}
+                wordStartTargetsByChar[charN] = curData
             end
+            table.insert(curData, target)
+        else
+            target.hidden = true
         end
-        if not curData then
-            curData = {}
-            wordStartTargetsByChar[tChar] = curData
-        end
-        table.insert(curData, target)
     end
 
     --timer:add('by word')
 
     -- assign labels to groups of targets
-    for key, targets in pairs(wordStartTargetsByChar) do
-        local priority = getKeyPriority(key)
+    for charN, targets in pairs(wordStartTargetsByChar) do
+        local priority = getKeyPriority(charN)
         if #targets == 1 then
             local target = targets[1]
             target.priority = priority -- maybe prioritize uniquie more if word chars?
+            target.label = nil
             if is_special.unique then
-                setUniqueTargetLabel(target)
+                target.unique = true
             else
-                local labels = options.get_typed_labels(key)
-                targets.labelChars = labels
-                setFirstTargetLabel(target)
+                targets.labelChars = options.normalizedLabels
             end
         else
-            local labelChars = options.get_typed_labels(key)
-            targets.labelChars = labelChars
+            targets.labelChars = options.normalizedLabels
 
             local sortedTargets = sortTargets(targets, cursorLine, cursorCol)
             local labelCharsI = {}
 
-            -- first target is special, its label is the key itself
+            -- first target is special, its label is the key itself (normalized)
             local first = sortedTargets[1]
             local targetStart = 1
             if first then
                 targetStart = 2
-                setFirstTargetLabel(first)
+                first.label = nil
                 first.priority = priority
-                local charMatch = first.match
-                local matchCache = first.matchCache
 
-                -- we need to remove all other label chars that that are quivalent.
-                -- Case sensitivity is the same as for input characters, as it gives more
-                -- available label chars if case sensitivity is turned on.
-                for i = 1, #labelChars do
-                    if not test(labelChars[i], charMatch, matchCache) then
-                        table.insert(labelCharsI, i)
-                    end
+                for i, v in ipairs(options.normalizedLabels) do
+                    if charN ~= v then table.insert(labelCharsI, i) end
                 end
             else
                 for i = 1, #labelChars do
@@ -688,7 +683,7 @@ local function collectTargets(options)
 
             -- don't show labels on leading whitespace yet (ugly)
             if t.priority == 0 and t.charI == 1 then t.hidden = true
-            elseif t.priority == 2 then -- and t is not hidden
+            elseif not t.hidden and t.priority == 2 then
                 -- remove intersecting at highest stage (since we're iterating them anyway)
                 if prev and t.line == prev.line and t.charI <= prev.charEndI then
                     if prev.charEndI > cur.charEndI then
@@ -790,58 +785,17 @@ local function jumpToWord(options, targetsInfo)
     local inputChar = get_input()
     if inputChar == nil then return end
 
-    -- apply smart case
-    -- NOTE: we can only add restrictions, since we already computed
-    -- the labels, and if we would have to join 2+ targets groups,
-    -- the labels would collide; and label chars also wouldn't be the same
-    -- (would break first target, which assumes other targets don't take its character)
-    local sensitivityChanged = false
-    if not caseSensitive and options.smart_case then
-        local upperChar = vim.fn.toupper(inputChar)
-        local lowerChar = vim.fn.tolower(inputChar)
-
-        if upperChar ~= lowerChar and inputChar == upperChar
-          and canBeInputed(upperChar) and canBeInputed(lowerChar)
-        then
-          sensitivityChanged = true
-          caseSensitive = true
-        end
-    end
-
-    local inputMatch = makeCharMatch(inputChar, caseSensitive)
-    local matchCache = eqClassCache(inputChar, caseSensitive)
-
     -- find group of targets that matches input characters
+    local curTargetsChar = options.char_normalize(inputChar)
     local curTargets, curLabelChars
-
-    if sensitivityChanged then
-        -- sensitivityChanged => prev was case insensitive
-        local oldInputMatch = makeCharMatch(inputChar, false)
-        local oldInputCache = eqClassCache(inputChar, false)
-
-        -- find targets that would've been used and filter ones that have different case
-        for targetsChar, targets in pairs(wordStartTargetsByChar) do
-            if test(targetsChar, oldInputMatch, oldInputCache) then
-                curTargets = {}
-                for _, target in ipairs(targets) do
-                    if test(target.char, inputMatch, matchCache) then
-                        table.insert(curTargets, target)
-                    end
-                end
-                curLabelChars = targets.labelChars
-                break
+    for targetsChar, targets in pairs(wordStartTargetsByChar) do
+        if targetsChar == curTargetsChar then
+            curTargets = {}
+            for _, target in ipairs(targets) do
+                table.insert(curTargets, target)
             end
-        end
-    else
-        for targetsChar, targets in pairs(wordStartTargetsByChar) do
-            if test(targetsChar, inputMatch, matchCache) then
-                curTargets = {}
-                for _, target in ipairs(targets) do
-                    table.insert(curTargets, target)
-                end
-                curLabelChars = targets.labelChars
-                break
-            end
+            curLabelChars = targets.labelChars
+            break
         end
     end
 
@@ -891,6 +845,7 @@ local function jumpToWord(options, targetsInfo)
         vim.cmd.redraw()
         inputChar = get_input()
         if inputChar == nil then break end
+        local inputN = options.char_normalize(inputChar)
 
         local lastNewTarget = 0
         local found
@@ -898,16 +853,16 @@ local function jumpToWord(options, targetsInfo)
         for i = 1, lastCurTarget do
             local target = curTargets[i]
             if not target.label then
-                if test(inputChar, target.match, target.matchCache) then
+                if inputN == curTargetsChar then
                     found = target
                     break
                 end
             elseif target.label[1] >= iteration then
-                if inputChar == curLabelChars[target.label[2]] then
+                if inputN == curLabelChars[target.label[2]] then
                     lastNewTarget = lastNewTarget + 1
                     curTargets[lastNewTarget] = target
                 end
-            elseif inputChar == curLabelChars[target.label[3]] then
+            elseif inputN == curLabelChars[target.label[3]] then
                 found = target
                 break
             end
@@ -1005,6 +960,8 @@ local function jump(opts)
     local ok, result = pcall(collectTargets, options)
     if not ok then
       vim.api.nvim_echo({{'Error: '..vim.inspect(result), 'ErrorMsg'}}, true, {})
+      return
+    elseif result == nil then
       return
     end
 
