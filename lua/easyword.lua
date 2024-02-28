@@ -25,29 +25,37 @@ end
 
 --- patterns and functions for testing if a character should be considered a target ---
 
-local patterns = {
-    upper = { match = vim.regex('^[[:upper:]]$'), cache = {} },
-    lower = { match = vim.regex('^[[:lower:]]$'), cache = {} },
-    digit = { match = vim.regex('^[[:digit:]]$'), cache = {} },
-}
+local patterns = { vim.regex('^[[:digit:]]$'), vim.regex('^[[:lower:]]$'), vim.regex('^[[:upper:]]$'), }
+local categoriesCache = {}
 
--- populate caches
+-- populate cache
 for i = 0, 127 do
     local char = string.char(i)
-    for _, v in pairs(patterns) do
-        v.cache[char] = v.match:match_str(char) ~= nil
+    for c, p in ipairs(patterns) do
+        if p:match_str(char) ~= nil then
+            categoriesCache[char] = c
+            goto next
+        end
     end
+    categoriesCache[char] = 0
+    ::next::
 end
 
-local function test(char, match, matchCache)
-    if char == nil then return false end
+local function category(char)
+    if char == nil then return 0 end
 
-    local value = matchCache[char]
-    if value == nil then
-        value = match:match_str(char) ~= nil
-        matchCache[char] = value
+    local value = categoriesCache[char]
+    if value ~= nil then return value end
+
+    for c, p in ipairs(patterns) do
+        if p:match_str(char) ~= nil then
+            categoriesCache[char] = c
+            return c
+        end
     end
-    return value
+
+    categoriesCache[char] = 0
+    return 0
 end
 
 -- Ideally should match one character that can be typed.
@@ -82,17 +90,12 @@ local function splitByChars(str)
             end
 
             table.insert(result, string.char(byte))
+            if not nextByte then return result end
             byte = nextByte
             i = i + 1
-            if not nextByte then
-                return result
-            end
         end
     end
-
-    local result2 = vim.fn.split(str:sub(i), '\\zs')
-    vim.list_extend(result, result2)
-
+    vim.list_extend(result, vim.fn.split(str:sub(i), '\\zs'))
     return result
 end
 
@@ -103,35 +106,20 @@ end
 --                   ^          ^
 local function test_split_identifiers(chars, cur_i)
     local cur_char = chars[cur_i]
+    local prev_char = chars[cur_i - 1]
 
-    local is_match = false
-
-    -- TODO: replace by category instead of 3 individual tests
-    local lo = patterns.lower
-    local up = patterns.upper
-    local digit = patterns.digit
-
-    if test(cur_char, lo.match, lo.cache) then
-        local prev_char = chars[cur_i - 1]
-        is_match = not test(prev_char, up.match, up.cache)
-            and not test(prev_char, lo.match, lo.cache)
-    elseif test(cur_char, up.match, up.cache) then
-        local prev_char = chars[cur_i - 1]
-        if not test(prev_char, up.match, up.cache) then
-            is_match = true
-        else
-            local next_char = chars[cur_i + 1]
-            is_match = test(next_char, lo.match, lo.cache)
-                or test(next_char, digit.match, digit.cache)
-        end
-    elseif test(cur_char, digit.match, digit.cache) then
-        is_match = not test(chars[cur_i-1], digit.match, digit.cache)
+    local curC = category(cur_char)
+    if curC == 2 then -- lower
+        return category(prev_char) < 2
+    elseif curC == 3 then --upper
+        if category(prev_char) ~= 3 then return true end
+        local nextC = category(chars[cur_i + 1])
+        return nextC == 1 or nextC == 2
+    elseif curC == 1 then -- digit
+        return category(prev_char) ~= 1
     else
-        local prev_char = chars[cur_i - 1]
-        is_match = prev_char ~= cur_char -- matching only first character in ==, [[ and ]]
+        return cur_char ~= prev_char -- matching only first character in ==, [[ and ]]
     end
-
-    return is_match
 end
 
 local function get_targets(bufId, topLine, botLine)
@@ -459,16 +447,7 @@ local function getKeyPriority(key)
     if key == ' ' or key == '\t' then
         return 0
     end
-
-    local u = patterns.upper
-    local l = patterns.lower
-    local d = patterns.digit
-
-    if test(key, u.match, u.cache) or test(key, l.match, l.cache) or test(key, d.match, d.cache) then
-        return 2
-    else
-        return 1
-    end
+    if category(key) > 0 then return 2 else return 1 end
 end
 
 --- measurements ---
@@ -972,5 +951,4 @@ return {
     options = defaultOptions,
     apply_default_highlight = applyDefaultHighlight,
     jump = jump,
-    regexp_test = test,
 }
