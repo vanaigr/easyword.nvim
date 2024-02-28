@@ -211,7 +211,7 @@ local defaultLabels = {
 local defaultNormalizedLabels = defaultLabels
 
 local defaultOptions = {
-    -- must be all unique and 1 cell wide. #labels >= 2
+    -- must be all unique and 1 cell wide. #labels >= 3
     labels = defaultLabels,
     normalizedLabels = defaultNormalizedLabels,
     char_normalize = defaultCharNormalize,
@@ -306,61 +306,61 @@ end
 --- labels ---
 
 -- generate variable length labels that use at most 2 characters, second char is always used only once at the end
--- returns { { repCount, repCharI, lastCharI }, ... }
-local function computeLabels(labelCharsI, max)
-  if #labelCharsI < 2 then
-    if max == 0 then return {} end
-    if #labelCharsI == 1 and max == 1 then return { 0, labelCharsI[1], labelCharsI[1] } end
-    error('could not generate ' .. max .. ' labels from ' .. #labelCharsI .. ' label variations')
-  end
-
-  -- list of #chars in labels that have repeating label
-  local sameCharLabels = {}
-  for _, i in ipairs(labelCharsI) do table.insert(sameCharLabels, { 0, i, i }) end
-
-  local labels = {}
-
-  local curI = 1
-  while #labels + #sameCharLabels < max do
-    local curLabel = sameCharLabels[curI]
-    local labelChar = curLabel[2]
-    local curLabelLen = curLabel[1] + 1
-
-    for _, i in ipairs(labelCharsI) do
-      if i ~= labelChar then
-        table.insert(labels, { curLabelLen, labelChar, i })
-      end
+-- labels would contain max * { { repCount, repCharI, lastCharI }, ... }
+local function computeLabels(sameCharLabels, sameC, max, labels)
+    if #sameCharLabels < 2 then
+        if max == 0 then return {} end
+        if #sameCharLabels == max then return sameCharLabels end
+        error('could not generate ' .. max .. ' labels from ' .. #sameCharLabels .. ' label variations')
     end
 
-    curLabel[1] = curLabel[1] + 1
-    curI = curI + 1
-    if curI > #sameCharLabels then curI = 1 end
-  end
+    local regularEnd, sameI = 0, 0
+    while regularEnd + sameC < max do
+        local curLabel = sameCharLabels[sameI + 1]
+        local labelChar = curLabel[2]
+        local curLabelLen = curLabel[1] + 1
 
-  -- merge same char labels and regular labels
-  local addedCount = 0
-  local labelsI = 1
-  while addedCount < #sameCharLabels do
-    local sameCharLabel = sameCharLabels[curI]
-    local label = labels[labelsI]
+        for i = 1, sameC do
+            local oChar = sameCharLabels[i][2]
+            if oChar ~= labelChar then
+                labels[regularEnd + 1] = { curLabelLen, labelChar, oChar }
+                regularEnd = regularEnd + 1
+            end
+        end
 
-    if not label then
-      table.insert(labels, sameCharLabel)
-      addedCount = addedCount + 1
-      curI = curI + 1
-      if curI > #sameCharLabels then curI = 1 end
-    else
-      if sameCharLabel[1] <= label[1] then
-        table.insert(labels, labelsI, sameCharLabel)
-        addedCount = addedCount + 1
-        curI = curI + 1
-        if curI > #sameCharLabels then curI = 1 end
-      end
-      labelsI = labelsI + 1
+        curLabel[1] = curLabel[1] + 1
+        sameI = sameI + 1
+        if sameI >= #sameCharLabels then sameI = 0 end
     end
-  end
 
-  return labels
+    -- Merge same char array and regular labels. Same char labels array is split by sameI into 2 parts
+    -- where all labels have same length, and lower part labels have length one more than upper part.
+
+    -- Avoiding possible penalty for holes in array (extra -1 because last is overwritten first anyway)
+    for i = #labels + 1, regularEnd + sameC - 2 do labels[i] = 0 end
+
+    local sameLC, sameUC = sameI, sameC - sameI -- lower count, upper count
+
+    if sameLC ~= 0 then -- lower part
+        local sameV = sameCharLabels[1][1]
+        while regularEnd > 0 do
+            local l = labels[regularEnd] -- '- 1 + 1'
+            if l[1] < sameV then break end
+            labels[regularEnd + sameC] = l -- '- 1 + 1'
+            regularEnd = regularEnd - 1
+        end
+        for i = 1, sameLC do labels[regularEnd + sameUC + i] = sameCharLabels[i] end
+    end
+
+    -- upper part
+    local sameV = sameCharLabels[sameLC + 1][1]
+    while regularEnd > 0 do
+        local l = labels[regularEnd] -- '- 1 + 1'
+        if l[1] < sameV then break end
+        labels[regularEnd + sameUC] = l -- '- 1 + 1'
+        regularEnd = regularEnd - 1
+    end
+    for i = 1, sameUC do labels[regularEnd + i] = sameCharLabels[sameLC + i] end
 end
 
 local function choose(cond, ifTrue, ifFalse)
@@ -570,6 +570,7 @@ local function collectTargets(options)
 
     if debug then timer:add('by word') end
 
+    local sameCharLabels, labels = {}, {}
     -- assign labels to groups of targets
     for charN, targets in pairs(wordStartTargetsByChar) do
         local priority = getKeyPriority(charN)
@@ -612,11 +613,14 @@ local function collectTargets(options)
             first.label = nil
             first.priority = priority
 
-            local labelCharsI = {}
+            local sameC = 0
             for i, v in ipairs(options.normalizedLabels) do
-                if charN ~= v then table.insert(labelCharsI, i) end
+                if charN ~= v then
+                    sameCharLabels[sameC + 1] = { 0, i, i }
+                    sameC = sameC + 1
+                end
             end
-            local labels = computeLabels(labelCharsI, #targets - 1)
+            computeLabels(sameCharLabels, sameC, #targets - 1, labels)
             local labelsI = 1
 
             -- sort by lines
@@ -962,7 +966,7 @@ end
 
 applyDefaultHighlight()
 
---vim.keymap.set('n', 's', jump)
+if debug then vim.keymap.set('n', 's', jump) end
 
 return {
     options = defaultOptions,
