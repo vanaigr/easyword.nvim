@@ -810,7 +810,7 @@ local function jumpToWord(options, targetsInfo)
         vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
         applyBg()
 
-        for i = 1, lastVisibleI do
+        for i = 1, lastCurTarget do
           displayLabel(curTargets[i], options, iteration)
         end
 
