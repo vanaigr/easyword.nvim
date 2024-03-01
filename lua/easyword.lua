@@ -4,9 +4,10 @@ local unpack = table.unpack or unpack
 local bit = require('bit')
 
 local debug = false
-if debug then
-    local function pcall(f, ...) return true, f(...) end
-end
+local map = false
+
+local pcall = pcall
+if debug then pcall = function(f, ...) return true, f(...) end end
 
 local function replace_keycodes(s)
     return vim.api.nvim_replace_termcodes(s, true, false, true)
@@ -56,23 +57,6 @@ local function category(char)
 
     categoriesCache[char] = 0
     return 0
-end
-
--- Ideally should match one character that can be typed.
--- Currently matches a single (possibly multibyte)
--- character without combining chars
-local inputChar = vim.regex('.')
-
--- returns true if if str can be inputed by user
--- (if get_input() can return str)
-function canBeInputed(str)
-  local byte = string.byte(str, 1)
-  if byte < 128 then --ascii
-    return #str == 1
-  else
-    local start, en = inputChar:match_str(str)
-    return start == 0 and en == #str
-  end
 end
 
 local function splitByChars(str)
@@ -196,12 +180,11 @@ local defaultLabels = {
     's', 'j', 'k', 'd', 'l', 'f', 'c', 'n', 'i', 'e', 'w', 'r', 'o',
     'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
 }
-local defaultNormalizedLabels = defaultLabels
 
 local defaultOptions = {
     -- must be all unique and 1 cell wide. #labels >= 3
     labels = defaultLabels,
-    normalizedLabels = defaultNormalizedLabels,
+    normalizedLabels = defaultLabels,
     char_normalize = defaultCharNormalize,
     recover_key = nil --[[
       a char (string) that, when pressed after the jump,
@@ -235,15 +218,12 @@ local function createOptions(opts)
     result.char_normalize = opts.char_normalize or defaultOptions.char_normalize
 
     local l = opts.labels
-    if l then -- TODO: also add normalized labels into options
-        result.labels = vim.list_extend({}, l)
-    else
-        result.labels = defaultLabels
-    end
+    if l then result.labels = vim.list_extend({}, l)
+    else result.labels = defaultOptions.labels end
 
     -- TODO: check if normalized targets are different
     if result.char_normalize == defaultOptions.char_normalize then
-        result.normalizedLabels = defaultNormalizedLabels
+        result.normalizedLabels = defaultOptions.normalizedLabels
     else
         result.normalizedLabels = {}
         for k, v in ipairs(result.labels) do
@@ -252,11 +232,8 @@ local function createOptions(opts)
     end
 
     local t = opts.special_targets
-    if t then
-        result.special_targets = { unique = toBoolean(t.unique), first = toBoolean(t.first) }
-    else
-        result.special_targets = defaultOptions.special_targets
-    end
+    if t then result.special_targets = { unique = toBoolean(t.unique), first = toBoolean(t.first) }
+    else result.special_targets = defaultOptions.special_targets end
 
     local hl = opts.highlight
     if hl then
@@ -405,15 +382,13 @@ local function targetLabelLen(target, options)
     local is_special = options.special_targets
 
     if not target.label then
-        if is_special.unique and target.unique then
-            return 1
-        elseif is_special.first then
-            return 1
+        if (is_special.unique and target.unique) or is_special.first then
+            return 0
         else
-            return 2
+            return 1
         end
     else
-        return 1 + target.label[1] + 1
+        return target.label[1] + 1
     end
 end
 
@@ -433,21 +408,6 @@ local function findPosition(targets, line, col)
         end
     end
     return begin
-end
-
---- sort labels relative to cursor:
---- interleave lines with targets above and below cursor, reverse order on line for lines above.
---- First mark will always be next after cursor, second is previous before the cursor.
---- Input must be sorted by lines and then columns (increasing)
-local function sortTargets(targets, cursorLine, cursorCol, output)
-end
-
--- more priority == more important
-local function getKeyPriority(key)
-    if key == ' ' or key == '\t' then
-        return 0
-    end
-    if category(key) > 0 then return 2 else return 1 end
 end
 
 --- measurements ---
@@ -552,8 +512,14 @@ local function collectTargets(options)
     local sameCharLabels, labels = {}, {}
     -- assign labels to groups of targets
     for charN, targets in pairs(wordStartTargetsByChar) do
-        local priority = getKeyPriority(charN)
         assert(#targets > 0)
+
+        -- more priority == more important
+        local priority
+        if charN == ' ' or charN == '\t' then priority = 0
+        elseif category(charN) <= 0 then priority = 1
+        else priority = 2 end
+
         if #targets == 1 then
             local target = targets[1]
             target.priority = priority -- maybe prioritize uniquie more if word chars?
@@ -653,7 +619,7 @@ local function collectTargets(options)
         -- Compute end bound (inclusive). Assumes all chars are length 1
         for i, t in ipairs(wordStartTargets) do
             local start = t.charI
-            t.charEndI = t.charI + targetLabelLen(t, options) - 1
+            t.charEndI = t.charI + targetLabelLen(t, options) -- + 1(target char width) - 1
 
             -- don't show labels on leading whitespace yet (ugly)
             if t.priority == 0 and t.charI == 1 then t.hidden = true
@@ -945,7 +911,7 @@ end
 
 applyDefaultHighlight()
 
-if debug then vim.keymap.set('n', 's', jump) end
+if map then vim.keymap.set('n', 's', jump) end
 
 return {
     options = defaultOptions,
