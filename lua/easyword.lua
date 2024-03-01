@@ -533,11 +533,10 @@ local function collectTargets(options)
     for charN, targets in pairs(wordStartTargetsByChar) do
         assert(#targets > 0)
 
-        -- more priority == more important
         local priority
-        if charN == ' ' or charN == '\t' then priority = 0
+        if charN == ' ' or charN == '\t' then priority = 2 -- Note: there are more spaces...
         elseif category(charN) <= 0 then priority = 1
-        else priority = 2 end
+        else priority = 0 end
 
         if #targets == 1 then
             local target = targets[1]
@@ -632,7 +631,7 @@ local function collectTargets(options)
     if #wordStartTargets > 1 then
         -- Go through the visible targets once for each priority
         -- (starting from highest) and remove targets at that priority
-        -- if they intersect with other targets with priority >= cur.
+        -- if they intersect with other targets with priority <= cur.
 
         local prev
         -- Compute end bound (inclusive). Assumes all chars are length 1
@@ -640,9 +639,8 @@ local function collectTargets(options)
             local start = t.charI
             t.charEndI = t.charI + targetLabelLen(t, options) -- + 1(target char width) - 1
 
-            -- don't show labels on leading whitespace yet (ugly)
-            if t.priority == 0 and t.charI == 1 then t.hidden = true
-            elseif not t.hidden and t.priority == 2 then
+            if t.priority == 2 then t.hidden = true -- skipping all whitespace
+            elseif not t.hidden and t.priority == 0 then
                 -- remove intersecting at highest stage (since we're iterating them anyway)
                 if prev and t.line == prev.line and t.charI <= prev.charEndI then
                     if prev.charEndI > cur.charEndI then
@@ -658,8 +656,10 @@ local function collectTargets(options)
         end
 
         -- hide intersecting targets
-        for stage = 1, 0, -1 do
-            -- find starting target (visible, priority >= current)
+        do -- Note: stage 2 is skipped, since all targets are hidden
+            local stage = 1
+
+            -- find starting target (visible, more important or same priority as current)
             local prevI = 1
             local prev = wordStartTargets[prevI]
             while prev and (prev.hidden or prev.priority < stage) do
@@ -670,10 +670,10 @@ local function collectTargets(options)
             local i = prevI + 1
             while i <= #wordStartTargets do
                 local cur = wordStartTargets[i]
-                if not cur.hidden and cur.priority >= stage then
+                if not cur.hidden and cur.priority <= stage then
                     if cur.line == prev.line and cur.charI <= prev.charEndI then
                         -- it's better to keep prev if priorities are equal and it stops at same column?
-                        if prev.priority < cur.priority or prev.charEndI > cur.charEndI then
+                        if prev.priority > cur.priority or prev.charEndI > cur.charEndI then
                             prev.hidden = true
                             prev = cur
                         else
