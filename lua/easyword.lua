@@ -117,6 +117,7 @@ local function get_targets(bufId, topLine, botLine)
         else
             local line = vim.api.nvim_buf_get_lines(bufId, lnum-1, lnum, true)[1]
             local chars = splitByChars(line)
+            table.insert(chars, '\n')
 
             -- if I could just use utf_ptr2CharInfo() ...
             local col = 1
@@ -129,7 +130,7 @@ local function get_targets(bufId, topLine, botLine)
                 end
                 col = col + string.len(cur)
             end
-            assert(string.len(line) == col - 1)
+            assert(string.len(line) + 1 == col - 1)
 
             lnum = lnum + 1
         end
@@ -141,39 +142,53 @@ end
 
 local defaultCharNormalize
 do
-  local normCache = {}
-  local chars = {}
-  for i = 1, 64 do
-    local ch = string.char(i)
-    chars[ch] =  vim.regex('^[[='..ch..'=]]\\c$')
-    normCache[ch] = ch
-  end
-  for i = 91, 127 do
-    local ch = string.char(i)
-    chars[ch] = vim.regex('^[[='..ch..'=]]\\c$')
-    normCache[ch] = ch
-  end
+    local normCache = {}
+    local chars = {}
+
+    for i = 1, 8 do
+        local ch = string.char(i)
+        normCache[ch] = ch
+    end
+    normCache['\t'] = ' '
+    normCache['\n'] = ' '
+    for i = 11, 31 do
+        local ch = string.char(i)
+        normCache[ch] = ch
+    end
+    for i = 32, 64 do
+        local ch = string.char(i)
+        chars[ch] =  vim.regex('^[[='..ch..'=]]\\c$')
+        normCache[ch] = ch
+    end
+    for i = 1, 26 do -- A-Z => a-z
+        normCache[string.char(64 + i)] = string.char(96 + i)
+    end
+    for i = 91, 126 do
+        local ch = string.char(i)
+        chars[ch] = vim.regex('^[[='..ch..'=]]\\c$')
+        normCache[ch] = ch
+    end
+    do
+        local ch = string.char(127)
+        normCache[ch] = ch
+    end
 
 
-  for i = 0, 25 do -- A-Z => a-z
-    normCache[string.char(65 + i)] = string.char(97 + i)
-  end
+    defaultCharNormalize = function(char)
+        local v = normCache[char]
+        if v then return v end
 
-  defaultCharNormalize = function(char)
-      local v = normCache[char]
-      if v then return v end
+        for k, pattern in pairs(chars) do
+            if pattern:match_str(char) then
+                normCache[char] = k
+                return k
+            end
+        end
 
-      for k, pattern in pairs(chars) do
-          if pattern:match_str(char) then
-              normCache[char] = k
-              return k
-          end
-      end
-
-      chars[char] = vim.regex('^[[='..char..'=]]\\c$')
-      normCache[char] = char
-      return char
-  end
+        chars[char] = vim.regex('^[[='..char..'=]]\\c$')
+        normCache[char] = char
+        return char
+    end
 end
 
 local defaultLabels = {
