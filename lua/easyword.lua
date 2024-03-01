@@ -201,6 +201,7 @@ local defaultOptions = {
     labels = defaultLabels,
     normalizedLabels = defaultLabels,
     char_normalize = defaultCharNormalize,
+    target_display = { ['\n'] = ' ' },
     recover_key = nil --[[
       a char (string) that, when pressed after the jump,
       restarts the previous jump with the same labels and everything.
@@ -231,6 +232,7 @@ local function createOptions(opts)
     result.recover_key = opts.recover_key
     result.namespace = opts.namespace or defaultOptions.namespace
     result.char_normalize = opts.char_normalize or defaultOptions.char_normalize
+    result.target_display = opts.target_display or defaultOptions.target_display
 
     local l = opts.labels
     if l then result.labels = vim.list_extend({}, l)
@@ -355,31 +357,33 @@ local function displayLabel(target, options, stage)
     local displayLabels = options.labels
     local l = target.label
 
+    local char = options.target_display[target.char] or target.char
+
     local virt_text
     if not l then -- if first target (may be special) (unique rendered separately)
         if is_special.unique and target.unique then
-            virt_text = { { target.char, hl.unique } }
+            virt_text = { { char, hl.unique } }
         elseif is_special.first then
-            virt_text = { { target.char, choose(stage == 0, hl.target_first, hl.target_first_typed) }}
+            virt_text = { { char, choose(stage == 0, hl.target_first, hl.target_first_typed) }}
         else
             virt_text = {
-                { target.char, choose(stage == 0, hl.rest_char, hl.typed_char) },
-                { target.char, hl.rest_label },
+                { char, choose(stage == 0, hl.rest_char, hl.typed_char) },
+                { char, hl.rest_label },
             }
         end
     elseif stage == 0 then
         virt_text = {
-            { target.char, hl.rest_char },
+            { char, hl.rest_char },
             { displayLabels[l[2]]:rep(l[1]) .. displayLabels[l[3]], hl.rest_label },
         }
     elseif stage - 1 > l[1] then
         virt_text = {
-            { target.char, hl.typed_char },
+            { char, hl.typed_char },
             { displayLabels[l[2]]:rep(l[1]) .. displayLabels[l[3]], hl.typed_label },
         }
     else
         virt_text = {
-            { target.char, hl.typed_char },
+            { char, hl.typed_char },
             { displayLabels[l[2]]:rep(stage - 1), hl.typed_label },
             { displayLabels[l[2]]:rep(l[1] - stage + 1) .. displayLabels[l[3]], hl.rest_label },
         }
