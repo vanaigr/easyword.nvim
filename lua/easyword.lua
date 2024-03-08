@@ -30,17 +30,13 @@ local patterns = { vim.regex('^[[:digit:]]$'), vim.regex('^[[:lower:]]$'), vim.r
 local categoriesCache = {}
 
 -- populate cache
-for i = 0, 127 do
-    local char = string.char(i)
-    for c, p in ipairs(patterns) do
-        if p:match_str(char) ~= nil then
-            categoriesCache[char] = c
-            goto next
-        end
-    end
-    categoriesCache[char] = 0
-    ::next::
-end
+for i =   0,  47 do categoriesCache[string.char(i)] = 0 end
+for i =  48,  57 do categoriesCache[string.char(i)] = 1 end
+for i =  58,  64 do categoriesCache[string.char(i)] = 0 end
+for i =  65,  90 do categoriesCache[string.char(i)] = 3 end
+for i =  91,  96 do categoriesCache[string.char(i)] = 0 end
+for i =  97, 122 do categoriesCache[string.char(i)] = 2 end
+for i = 123, 127 do categoriesCache[string.char(i)] = 0 end
 
 local function category(char)
     if char == nil then return 0 end
