@@ -924,8 +924,6 @@ local function jump(opts)
     end
 end
 
-applyDefaultHighlight()
-
 if map then vim.keymap.set('n', 's', jump) end
 
 return {
