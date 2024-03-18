@@ -92,9 +92,7 @@ local function test_split_identifiers(chars, cur_i)
     if curC == 2 then -- lower
         return category(prev_char) < 2
     elseif curC == 3 then --upper
-        if category(prev_char) ~= 3 then return true end
-        local nextC = category(chars[cur_i + 1])
-        return nextC == 1 or nextC == 2
+        return category(prev_char) ~= 3 or category(chars[cur_i + 1]) == 2
     elseif curC == 1 then -- digit
         return category(prev_char) ~= 1
     else
