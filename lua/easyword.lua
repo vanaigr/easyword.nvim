@@ -137,21 +137,14 @@ end
 local defaultCharNormalize
 do
     local normCache = {}
-    local chars = {}
+    local charRegex = {}
 
-    for i = 1, 8 do
-        local ch = string.char(i)
-        normCache[ch] = ch
-    end
     normCache['\t'] = ' '
     normCache['\n'] = ' '
-    for i = 11, 31 do
-        local ch = string.char(i)
-        normCache[ch] = ch
-    end
+    normCache['\r'] = ' '
     for i = 32, 64 do
         local ch = string.char(i)
-        chars[ch] =  vim.regex('^[[='..ch..'=]]\\c$')
+        charRegex[ch] =  vim.regex('^[[='..ch..'=]]$\\c')
         normCache[ch] = ch
     end
     for i = 1, 26 do -- A-Z => a-z
@@ -159,27 +152,22 @@ do
     end
     for i = 91, 126 do
         local ch = string.char(i)
-        chars[ch] = vim.regex('^[[='..ch..'=]]\\c$')
+        charRegex[ch] = vim.regex('^[[='..ch..'=]]$\\c')
         normCache[ch] = ch
     end
-    do
-        local ch = string.char(127)
-        normCache[ch] = ch
-    end
-
 
     defaultCharNormalize = function(char)
         local v = normCache[char]
         if v then return v end
 
-        for k, pattern in pairs(chars) do
+        for k, pattern in pairs(charRegex) do
             if pattern:match_str(char) then
                 normCache[char] = k
                 return k
             end
         end
 
-        chars[char] = vim.regex('^[[='..char..'=]]\\c$')
+        charRegex[char] = vim.regex('^[[='..char..'=]]$\\c')
         normCache[char] = char
         return char
     end
@@ -225,20 +213,45 @@ local function createOptions(opts)
 
     result.recover_key = opts.recover_key
     result.namespace = opts.namespace or defaultOptions.namespace
-    result.char_normalize = opts.char_normalize or defaultOptions.char_normalize
     result.target_display = opts.target_display or defaultOptions.target_display
 
     local l = opts.labels
     if l then result.labels = vim.list_extend({}, l)
     else result.labels = defaultOptions.labels end
 
-    -- TODO: check if normalized targets are different
-    if result.char_normalize == defaultOptions.char_normalize then
+    result.char_normalize = opts.char_normalize or defaultOptions.char_normalize
+
+    local cn = opts.char_normalize
+    if not cn then
+        result.char_normalize = defaultOptions.char_normalize
         result.normalizedLabels = defaultOptions.normalizedLabels
     else
+        result.char_normalize = function(char)
+            local res = cn(char)
+            local tr = type(res)
+            if tr ~= 'string' then error('normalized `' .. char .. '` is not a string but ' .. tr) end
+            if res == '' then return nil end
+            return res
+        end
         result.normalizedLabels = {}
+
+        local hash = {}
         for k, v in ipairs(result.labels) do
-            result.normalizedLabels[k] = result.char_normalize(v)
+            local nc = result.char_normalize(v)
+
+            if not nc then
+                error('label char ' .. k .. ' `' .. v .. '` could not be normalized')
+            end
+            local hv = hash[nc]
+            if hv ~= nil then
+                error(
+                    'label chars ' .. k .. ' `' .. v .. '` and ? `' .. hv
+                    .. '` both normalized as `' .. nc .. '`'
+                )
+            end
+            hash[nc] = v
+
+            result.normalizedLabels[k] = nc
         end
     end
 
