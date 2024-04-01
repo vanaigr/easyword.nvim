@@ -13,8 +13,12 @@ Use your preferred plugin manager. No extra steps required.
 local easyword = require('easyword')
 easyword.apply_default_highlight()
 
-vim.keymap.set('n'         , 's', function() easyword.jump{ recover_key = 's' } end)
-vim.keymap.set({ 'x', 'o' }, 'x', function() easyword.jump{ recover_key = 'x' } end)
+vim.keymap.set('n'         , 's', function()
+    easyword.jump{ recover_key = 's' }
+end)
+vim.keymap.set({ 'x', 'o' }, 'x', function()
+    easyword.jump{ recover_key = 'x' }
+end)
 
 local group = vim.api.nvim_create_augroup('EasywordHighlighting', { clear = true })
 vim.api.nvim_create_autocmd('ColorScheme', {
@@ -22,6 +26,249 @@ vim.api.nvim_create_autocmd('ColorScheme', {
     pattern = '*', group = group,
 })
 ```
+
+# Case and accent sensitivity
+
+All labels, jump target characters and input characters are normalized,
+enabling different characters to be grouped together when their normalized forms match.
+Normalization function is provided through `char_normalize` field of the options table.
+```lua
+easyword.jump{ char_normalize = your_function }
+```
+
+Default normalization function is case and accent insensitive,
+with tab, newline and carriage return being equivalent to space.
+
+<details>
+
+<summary>Default character normalization function (case insensitive, accent insensitive)</summary>
+
+```lua
+local normFunction
+do
+    local normList = {}
+    local charRegex = {}
+
+    normList['\t'] = ' '
+    normList['\n'] = ' '
+    normList['\r'] = ' '
+    for i = 32, 64 do
+        local ch = string.char(i)
+        charRegex[ch] = vim.regex('^[[='..ch..'=]]$\\c')
+        normList[ch] = ch
+    end
+    for i = 1, 26 do -- A-Z => a-z
+        normList[string.char(64 + i)] = string.char(96 + i)
+    end
+    for i = 91, 126 do
+        local ch = string.char(i)
+        charRegex[ch] = vim.regex('^[[='..ch..'=]]$\\c')
+        normList[ch] = ch
+    end
+
+    normFunction = function(char)
+        local v = normList[char]
+        if v then return v end
+
+        for k, pattern in pairs(charRegex) do
+            if pattern:match_str(char) then
+                normList[char] = k
+                return k
+            end
+        end
+
+        -- Add a new character to the list
+        charRegex[char] = vim.regex('^[[='..char..'=]]$\\c')
+        normList[char] = char
+        return char
+    end
+end
+```
+
+</details>
+
+<details>
+
+<summary>Case sensitive, accent insensitive normalization</summary>
+
+```lua
+local normFunction
+do
+    local normList = {}
+    local charRegex = {}
+
+    normList['\t'] = ' '
+    normList['\n'] = ' '
+    normList['\r'] = ' '
+    for i = 32, 126 do
+        local ch = string.char(i)
+        charRegex[ch] = vim.regex('^[[='..ch..'=]]$\\C')
+        normList[ch] = ch
+    end
+
+    normFunction = function(char)
+        local v = normList[char]
+        if v then return v end
+
+        for k, pattern in pairs(charRegex) do
+            if pattern:match_str(char) then
+                normList[char] = k
+                return k
+            end
+        end
+
+        charRegex[char] = vim.regex('^[[='..char..'=]]$\\C')
+        normList[char] = char
+        return char
+    end
+end
+```
+
+</details>
+
+<details>
+
+<summary>Case insensitive, accent sensitive normalization</summary>
+
+```lua
+local normFunction
+do
+    local normList = {}
+    local charRegex = {}
+
+    normList['\t'] = ' '
+    normList['\n'] = ' '
+    normList['\r'] = ' '
+    for i = 32, 64 do
+        local ch = string.char(i)
+        normList[ch] = ch
+    end
+    for i = 1, 26 do -- A-Z => a-z
+        normList[string.char(64 + i)] = string.char(96 + i)
+    end
+    for i = 91, 96 do
+        local ch = string.char(i)
+        normList[ch] = ch
+    end
+    for i = 97, 122 do
+        local ch = string.char(i)
+        charRegex[ch] = vim.regex('^[[.'..ch..'.]]$\\c')
+    end
+    for i = 123, 126 do
+        local ch = string.char(i)
+        normList[ch] = ch
+    end
+
+    normFunction = function(char)
+        local v = normList[char]
+        if v then return v end
+
+        for k, pattern in pairs(charRegex) do
+            if pattern:match_str(char) then
+                normList[char] = k
+                return k
+            end
+        end
+
+        charRegex[char] = vim.regex('^[[.'..char..'.]]$\\c')
+        normList[char] = char
+        return char
+    end
+end
+```
+
+</details>
+
+<details>
+
+<summary>Case sensitive, accent sensitive normalization</summary>
+
+```lua
+local normFunction
+do
+    local normList = {}
+    normList['\t'] = ' '
+    normList['\n'] = ' '
+    normList['\r'] = ' '
+
+    normFunction = function(char)
+        local v = normList[char]
+        if v then return v end
+
+        return char
+    end
+end
+```
+
+</details>
+
+These functions map all the characters, even the ones that can't be typed on a regular 'qwerty' keyboard.
+You can return some fallback character in case the `char` is not in the original list,
+or an empty string so that the character would not considered a valid target.
+Don't forget to add it to the cache first!
+
+## Multiple keyboard layouts
+
+You can also map characters from different keyboard layouts to your primary layout.
+This allows jumping to characters from a different keyboard layout without actually switching to it.
+
+<details>
+
+<summary>Case insensitive, accent insensitive normalization, 'йцукен' mapped to 'qwerty'</summary>
+
+```lua
+local normFunction
+do
+    local normList = {}
+    local charRegex = {}
+
+    normList['\t'] = ' '
+    normList['\n'] = ' '
+    normList['\r'] = ' '
+    for i = 32, 64 do
+        local ch = string.char(i)
+        charRegex[ch] = vim.regex('^[[='..ch..'=]]$\\c')
+        normList[ch] = ch
+    end
+    for i = 1, 26 do -- A-Z => a-z
+        normList[string.char(64 + i)] = string.char(96 + i)
+    end
+    for i = 91, 126 do
+        local ch = string.char(i)
+        charRegex[ch] = vim.regex('^[[='..ch..'=]]$\\c')
+        normList[ch] = ch
+    end
+
+    local qwerty    = vim.fn.split([==[qwertyuiop[]asdfghjkl;'zxcvbnm,.`]==], '\\zs')
+    local cyrillic  = vim.fn.split([==[йцукенгшщзхъфывапролджэячсмитьбюё]==], '\\zs')
+    local cyrillicU = vim.fn.split([==[ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮЁ]==], '\\zs')
+
+    -- no regex since vim doesn't support equivalence classes for cyrillic
+    for i = 1, #cyrillic do
+        normList[cyrillic [i]] = qwerty[i]
+        normList[cyrillicU[i]] = qwerty[i]
+    end
+    normList['№'] = '#'
+
+    normFunction = function(char)
+        local v = normList[char]
+        if v then return v end
+
+        for k, pattern in pairs(charRegex) do
+            if pattern:match_str(char) then
+                normList[char] = k
+                return k
+            end
+        end
+
+        -- Map all other characters to space
+        normList[char] = ' '
+        return ' '
+    end
+end
+```
+
+</details>
 
 # Acknowledgments
 
