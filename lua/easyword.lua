@@ -187,6 +187,11 @@ local defaultOptions = {
       Use 's' if this is your key for jumping.
       Can also use vim.api.nvim_replace_termcodes(*<C-smth>*, true, false, true)
     ]],
+    key_groups = {} --[[
+        map of (normalized) keys to their groups.
+        labels from groups other than key_groups[target_char]
+        will be prioritized.
+    ]],
     highlight = {
         backdrop = 'EasywordBackdrop',
         target_first = 'EasywordTargetFirst',
@@ -254,6 +259,8 @@ local function createOptions(opts)
         )
     end
 
+    result.key_groups = opts.key_groups or {}
+
     local hl = opts.highlight
     if hl then
       result.highlight = {}
@@ -290,7 +297,7 @@ end
 -- generate variable length labels that use at most 2 characters, second char is always used only once at the end
 -- labels would contain max * { { repCount, repCharI, lastCharI }, ... }
 local function computeLabels(sameCharLabels, sameC, max, labels)
-    --if max <= #sameCharLabels then return sameCharLabels end
+    if max <= #sameCharLabels then return sameCharLabels end
 
     local regularEnd, sameI = 0, 0
     while regularEnd + sameC < max do
@@ -511,6 +518,8 @@ local function collectTargets(options)
     for charN, targets in pairs(wordStartTargetsByChar) do
         assert(#targets > 0)
 
+        local targetHand = options.key_groups[charN]
+
         local priority
         if charN == ' ' or charN == '\t' then priority = 2 -- Note: there are more spaces...
         elseif category(charN) <= 0 then priority = 1
@@ -547,9 +556,15 @@ local function collectTargets(options)
 
             local sameC = 0
             for i, v in ipairs(options.normalizedLabels) do
-                if charN ~= v then
-                    sameCharLabels[sameC + 1] = { 0, i, i }
+                if charN ~= v and options.key_groups[v] ~= targetHand then
                     sameC = sameC + 1
+                    sameCharLabels[sameC] = { 0, i, i }
+                end
+            end
+            for i, v in ipairs(options.normalizedLabels) do
+                if charN ~= v and options.key_groups[v] == targetHand then
+                    sameC = sameC + 1
+                    sameCharLabels[sameC] = { 0, i, i }
                 end
             end
             local curLabels = computeLabels(sameCharLabels, sameC, #targets - 1, labels)
