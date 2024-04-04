@@ -20,10 +20,6 @@ local function get_input()
     else return nil end
 end
 
-local function toBoolean(value)
-    if value then return true else return false end
-end
-
 --- patterns and functions for testing if a character should be considered a target ---
 
 local patterns = { vim.regex('^[[:digit:]]$'), vim.regex('^[[:lower:]]$'), vim.regex('^[[:upper:]]$'), }
@@ -178,6 +174,7 @@ local defaultLabels = {
     'm', 'u', 'v', 'a', 'q', 'p', 'x', 'z', '/',
 }
 
+-- Note: first target is special, its label is the key itself (normalized)
 local defaultOptions = {
     -- must be all unique and 1 cell wide. #labels >= 3
     labels = defaultLabels,
@@ -190,19 +187,14 @@ local defaultOptions = {
       Use 's' if this is your key for jumping.
       Can also use vim.api.nvim_replace_termcodes(*<C-smth>*, true, false, true)
     ]],
-    special_targets = {
-        unique = false, -- treat unique targets specially (don't assign labels)
-        first = true, -- true = don't display target char in label twice, use special highlight
-    },
     highlight = {
         backdrop = 'EasywordBackdrop',
-        unique = 'EasywordUnique',
         target_first = 'EasywordTargetFirst',
         target_first_typed = 'EasywordTargetFirstTyped',
-        typed_char = 'EasywordTypedChar',
         rest_char = 'EasywordRestChar',
-        typed_label = 'EasywordTypedLabel',
+        typed_char = 'EasywordTypedChar',
         rest_label = 'EasywordRestLabel',
+        typed_label = 'EasywordTypedLabel',
     },
     namespace = vim.api.nvim_create_namespace('Easyword'),
 }
@@ -255,10 +247,6 @@ local function createOptions(opts)
         end
     end
 
-    local t = opts.special_targets
-    if t then result.special_targets = { unique = toBoolean(t.unique), first = toBoolean(t.first) }
-    else result.special_targets = defaultOptions.special_targets end
-
     local hl = opts.highlight
     if hl then
       result.highlight = {}
@@ -276,11 +264,6 @@ local function applyDefaultHighlight(opts)
     local options = createOptions(opts)
     vim.api.nvim_set_hl(0, options.highlight.backdrop, { link = 'Comment' })
 
-    vim.api.nvim_set_hl(0, options.highlight.typed_char, { fg = 'grey', sp = 'red', underline = true, bold = true })
-    vim.api.nvim_set_hl(0, options.highlight.rest_char, { fg = 'grey', sp='grey', underline = true, bold = true })
-
-    vim.api.nvim_set_hl(0, options.highlight.unique, { bg = 'white', fg = 'black', bold = true })
-
     vim.api.nvim_set_hl(0, options.highlight.target_first, {
         bg = 'white', fg = 'black', bold = true,
     })
@@ -288,8 +271,11 @@ local function applyDefaultHighlight(opts)
         bg = 'white', fg = 'black', sp = 'red', underline = true, bold = true,
     })
 
-    vim.api.nvim_set_hl(0, options.highlight.typed_label, { sp = 'red', underline = true, bold  =  true })
+    vim.api.nvim_set_hl(0, options.highlight.rest_char, { fg = 'grey', sp='grey', underline = true, bold = true })
+    vim.api.nvim_set_hl(0, options.highlight.typed_char, { fg = 'grey', sp = 'red', underline = true, bold = true })
+
     vim.api.nvim_set_hl(0, options.highlight.rest_label, { bg = 'black', fg = 'white', bold = true })
+    vim.api.nvim_set_hl(0, options.highlight.typed_label, { sp = 'red', underline = true, bold  =  true })
 end
 
 --- labels ---
@@ -360,24 +346,14 @@ end
 local function displayLabel(target, options, stage)
     local hl = options.highlight
     local ns = options.namespace
-    local is_special = options.special_targets
     local displayLabels = options.labels
     local l = target.label
 
     local char = options.target_display[target.char] or target.char
 
     local virt_text
-    if not l then -- if first target (may be special) (unique rendered separately)
-        if is_special.unique and target.unique then
-            virt_text = { { char, hl.unique } }
-        elseif is_special.first then
-            virt_text = { { char, choose(stage == 0, hl.target_first, hl.target_first_typed) }}
-        else
-            virt_text = {
-                { char, choose(stage == 0, hl.rest_char, hl.typed_char) },
-                { char, hl.rest_label },
-            }
-        end
+    if not l then -- if first target
+        virt_text = { { char, choose(stage == 0, hl.target_first, hl.target_first_typed) }}
     elseif stage == 0 then
         virt_text = {
             { char, hl.rest_char },
@@ -404,18 +380,9 @@ end
 -- Ideally should take into account display labels size
 -- and position on screen (for tabs).
 -- Assumes all chars are 1 cell wide
-local function targetLabelLen(target, options)
-    local is_special = options.special_targets
-
-    if not target.label then
-        if (is_special.unique and target.unique) or is_special.first then
-            return 0
-        else
-            return 1
-        end
-    else
-        return target.label[1] + 1
-    end
+local function targetLabelLen(target)
+    if not target.label then return 0
+    else return target.label[1] + 1 end
 end
 
 --- functions for assigning labels to targets ---
@@ -464,8 +431,6 @@ end
 local function collectTargets(options)
     local timer
     if debug then timer = Timer:new(); timer:add('') end
-
-    local is_special = options.special_targets
 
     local winid = vim.api.nvim_get_current_win()
     local bufId = vim.api.nvim_get_current_buf()
@@ -543,18 +508,11 @@ local function collectTargets(options)
         elseif category(charN) <= 0 then priority = 1
         else priority = 0 end
 
+        targets.labelChars = options.normalizedLabels
         if #targets == 1 then
             local target = targets[1]
-            target.priority = priority -- maybe prioritize uniquie more if word chars?
-            target.label = nil
-            if is_special.unique then
-                target.unique = true
-            else
-                targets.labelChars = options.normalizedLabels
-            end
+            target.priority = priority
         else
-            targets.labelChars = options.normalizedLabels
-
             -- either one may be outside range
             local nextI = findPosition(targets, cursorLine, cursorCol)
             local prevI = nextI - 1
@@ -577,8 +535,6 @@ local function collectTargets(options)
             end
             assert(first ~= nil)
 
-            -- first target is special, its label is the key itself (normalized)
-            first.label = nil
             first.priority = priority
 
             local sameC = 0
@@ -640,7 +596,7 @@ local function collectTargets(options)
         local prev
         -- Compute end bound (inclusive). Assumes all chars are length 1
         for _, t in ipairs(wordStartTargets) do
-            t.charEndI = t.charI + targetLabelLen(t, options) -- + 1(target char width) - 1
+            t.charEndI = t.charI + targetLabelLen(t) -- + 1(target char width) - 1
 
             if t.priority == 2 then t.hidden = true -- skipping all whitespace
             elseif not t.hidden and t.priority == 0 then
@@ -758,14 +714,6 @@ local function jumpToWord(options, targetsInfo)
 
     if not curTargets or #curTargets == 0 then
         vim.api.nvim_echo({{ 'no targets', 'ErrorMsg' }}, true, {})
-        return
-    end
-
-    -- note: only if target was unique before (not if it became unique after smart case
-    -- since that would be unexpected)
-    if options.special_targets.unique and curTargets[1].unique then
-        local target = curTargets[1]
-        vim.fn.setpos('.', { 0, target.line, target.col, 0, target.charI })
         return
     end
 
