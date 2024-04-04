@@ -247,6 +247,13 @@ local function createOptions(opts)
         end
     end
 
+    if #result.normalizedLabels < 3 then
+        error(
+            'Number of normalized labels '
+            .. #result.normalizedLabels .. ' is less than required 3'
+        )
+    end
+
     local hl = opts.highlight
     if hl then
       result.highlight = {}
@@ -283,11 +290,7 @@ end
 -- generate variable length labels that use at most 2 characters, second char is always used only once at the end
 -- labels would contain max * { { repCount, repCharI, lastCharI }, ... }
 local function computeLabels(sameCharLabels, sameC, max, labels)
-    if #sameCharLabels < 2 then
-        if max == 0 then return {} end
-        if #sameCharLabels == max then return sameCharLabels end
-        error('could not generate ' .. max .. ' labels from ' .. #sameCharLabels .. ' label variations')
-    end
+    --if max <= #sameCharLabels then return sameCharLabels end
 
     local regularEnd, sameI = 0, 0
     while regularEnd + sameC < max do
@@ -308,10 +311,13 @@ local function computeLabels(sameCharLabels, sameC, max, labels)
         if sameI >= #sameCharLabels then sameI = 0 end
     end
 
-    -- Merge same char array and regular labels. Same char labels array is split by sameI into 2 parts
-    -- where all labels have same length, and lower part labels have length one more than upper part.
+    -- Merge same char array and regular labels.
+    -- Same char labels array is split by sameI into 2 parts
+    -- where all labels have same length, and lower part labels
+    -- have length one more than upper part.
 
-    -- Avoiding possible penalty for holes in array (extra -1 because last is overwritten first anyway)
+    -- Avoiding possible penalty for holes in array
+    -- (extra -1 in '-2' because very last is overwritten first anyway, not a hole)
     for i = #labels + 1, regularEnd + sameC - 2 do labels[i] = 0 end
 
     local sameLC, sameUC = sameI, sameC - sameI -- lower count, upper count
@@ -336,6 +342,8 @@ local function computeLabels(sameCharLabels, sameC, max, labels)
         regularEnd = regularEnd - 1
     end
     for i = 1, sameUC do labels[regularEnd + i] = sameCharLabels[sameLC + i] end
+
+    return labels
 end
 
 local function choose(cond, ifTrue, ifFalse)
@@ -544,7 +552,7 @@ local function collectTargets(options)
                     sameC = sameC + 1
                 end
             end
-            computeLabels(sameCharLabels, sameC, #targets - 1, labels)
+            local curLabels = computeLabels(sameCharLabels, sameC, #targets - 1, labels)
 
             -- sort by lines
             -- note: can be unbalanced
@@ -556,7 +564,7 @@ local function collectTargets(options)
                     local curT = targets[nextI]
                     if curT.line == afterLineI then
                         curT.priority = priority
-                        curT.label = labels[labelsI]
+                        curT.label = curLabels[labelsI]
                         labelsI = labelsI + 1
                         nextI = nextI + 1
                     else
@@ -570,7 +578,7 @@ local function collectTargets(options)
                     local curT = targets[prevI]
                     if curT.line == beforeLineI then
                         curT.priority = priority
-                        curT.label = labels[labelsI]
+                        curT.label = curLabels[labelsI]
                         labelsI = labelsI + 1
                         prevI = prevI - 1
                     else
@@ -587,7 +595,7 @@ local function collectTargets(options)
     if debug then timer:add('labels') end
 
     -- remove targets with intersecting labels
-    -- TODO: reassign labels? (should all be shorter than before)
+    -- TODO: reassign labels? (should all be shorter than before, right?)
     if #wordStartTargets > 1 then
         -- Go through the visible targets once for each priority
         -- (starting from highest) and remove targets at that priority
@@ -877,7 +885,10 @@ local function jump(opts)
     end
 end
 
-if map then vim.keymap.set('n', 's', jump) end
+if map then
+    applyDefaultHighlight()
+    vim.keymap.set('n', 's', jump)
+end
 
 return {
     options = defaultOptions,
