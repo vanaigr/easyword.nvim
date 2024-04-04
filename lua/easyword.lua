@@ -514,8 +514,6 @@ local function collectTargets(options)
 
     if debug then timer:add('remove at cursor') end
 
-    local caseSensitive = toBoolean(options.case_sensitive)
-
     -- group targets by characters.
     -- Targets are kept in the same order
     local wordStartTargetsByChar = {}
@@ -575,7 +573,7 @@ local function collectTargets(options)
                     first = curT
                     prevI = prevI - 1
                 end
-                beforeLineI = curTline
+                beforeLineI = curT.line
             end
             assert(first ~= nil)
 
@@ -591,7 +589,6 @@ local function collectTargets(options)
                 end
             end
             computeLabels(sameCharLabels, sameC, #targets - 1, labels)
-            local labelsI = 1
 
             -- sort by lines
             -- note: can be unbalanced
@@ -642,22 +639,21 @@ local function collectTargets(options)
 
         local prev
         -- Compute end bound (inclusive). Assumes all chars are length 1
-        for i, t in ipairs(wordStartTargets) do
-            local start = t.charI
+        for _, t in ipairs(wordStartTargets) do
             t.charEndI = t.charI + targetLabelLen(t, options) -- + 1(target char width) - 1
 
             if t.priority == 2 then t.hidden = true -- skipping all whitespace
             elseif not t.hidden and t.priority == 0 then
                 -- remove intersecting at highest stage (since we're iterating them anyway)
                 if prev and t.line == prev.line and t.charI <= prev.charEndI then
-                    if prev.charEndI > cur.charEndI then
+                    if prev.charEndI > t.charEndI then
                         prev.hidden = true
-                        prev = cur
+                        prev = t
                     else
-                        cur.hidden = the
+                        t.hidden = true
                     end
                 else
-                    prev = cur
+                    prev = t
                 end
             end
         end
@@ -668,7 +664,7 @@ local function collectTargets(options)
 
             -- find starting target (visible, more important or same priority as current)
             local prevI = 1
-            local prev = wordStartTargets[prevI]
+            prev = wordStartTargets[prevI]
             while prev and (prev.hidden or prev.priority < stage) do
                 prevI = prevI + 1
                 prev = wordStartTargets[prevI]
@@ -706,14 +702,11 @@ local function collectTargets(options)
 end
 
 local function jumpToWord(options, targetsInfo)
-    local winid = targetsInfo.win
+    --local winid = targetsInfo.win
     local bufId = targetsInfo.buf
 
     local topLine = targetsInfo.topLine
     local botLine = targetsInfo.botLine
-
-    local hl = options.highlight
-    local ns = options.namespace
 
     local wordStartTargets = targetsInfo.targets
     local wordStartTargetsByChar = targetsInfo.targetsByChar
@@ -771,6 +764,7 @@ local function jumpToWord(options, targetsInfo)
     -- note: only if target was unique before (not if it became unique after smart case
     -- since that would be unexpected)
     if options.special_targets.unique and curTargets[1].unique then
+        local target = curTargets[1]
         vim.fn.setpos('.', { 0, target.line, target.col, 0, target.charI })
         return
     end
