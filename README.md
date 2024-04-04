@@ -1,4 +1,4 @@
-Jump to any word on the screen by typing its first letter and an optional label.
+Jump to any word on the screen by typing its first letter and label.
 Most targets are shown right away, and then filtered out as you type.
 
 https://github.com/vanaigr/easyword.nvim/assets/65824523/5eaeace7-7b27-4d8c-a08c-2a95730892da
@@ -27,7 +27,18 @@ vim.api.nvim_create_autocmd('ColorScheme', {
 })
 ```
 
-# Case and accent sensitivity
+# Notes
+
+* The label for the first target after the cursor is the target character itself.
+That is, to jump to the first target, type the target character twice. If there
+are no targets after the cursor, the first target before the cursor is used.
+* Labels are specified with the `labels` option:
+`easyword.jump{ labels = { 'a', 'b', 'c' } }`.
+There must be a minimum of 3 label characters, and all characters must be distinct.
+* The `target_display` option determines the substitute characters for display.
+By default, `\n` is shown as a space. All label characters must occupy one display cell.
+
+## Case and accent sensitivity
 
 All labels, jump target characters and input characters are normalized,
 enabling different characters to be grouped together when their normalized forms match.
@@ -207,7 +218,7 @@ You can return some fallback character in case the `char` is not in the original
 or an empty string so that the character would not considered a valid target.
 Don't forget to add it to the cache first!
 
-## Multiple keyboard layouts
+### Multiple keyboard layouts
 
 You can also map characters from different keyboard layouts to your primary layout.
 This allows jumping to characters from a different keyboard layout without actually switching to it.
@@ -269,6 +280,36 @@ end
 ```
 
 </details>
+
+## Recover key
+
+Once the jump is finished, whether normally or with an error,
+the plugin allows you to redo the same jump with the same targets and labels.
+This functionality is enabled with the `recover_key` option,
+which specifies the sequence of keys needed to redo the jump.
+
+For simple keys (letters, numbers, etc.), a regular string can be used.
+For keys with CTRL, use `nvim_replace_termcodes`:
+```lua
+vim.api.nvim_replace_termcodes('<C-key>more keys', true, false, true)
+```
+
+## Highlight groups and namespaces
+
+You can specify your own highlight group names with `highlight` option.
+Default highlight groups:
+```lua
+backdrop = 'EasywordBackdrop'
+target_first = 'EasywordTargetFirst'
+target_first_typed = 'EasywordTargetFirstTyped'
+rest_char = 'EasywordRestChar'
+typed_char = 'EasywordTypedChar'
+rest_label = 'EasywordRestLabel'
+typed_label = 'EasywordTypedLabel'
+```
+
+Namespace can be specified with the `namespace` option.
+Default namespace is 'Easyword'.
 
 # Acknowledgments
 
