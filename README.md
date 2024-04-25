@@ -1,5 +1,5 @@
-Jump to any word on the screen by typing its first letter and label.
-Most targets are shown right away, and then filtered out as you type.
+Jump to a word by typing its first letter and a label.
+Most labels are shown right away and filtered out as you type.
 
 https://github.com/vanaigr/easyword.nvim/assets/65824523/5eaeace7-7b27-4d8c-a08c-2a95730892da
 
