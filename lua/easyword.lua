@@ -9,15 +9,10 @@ local map = false
 local pcall = pcall
 if debug then pcall = function(f, ...) return true, f(...) end end
 
-local function replace_keycodes(s)
-    return vim.api.nvim_replace_termcodes(s, true, false, true)
-end
-
-local esc = replace_keycodes("<esc>")
 local function get_input()
     local ok, ch = pcall(vim.fn.getcharstr)
-    if ok and ch ~= esc then return ch
-    else return nil end
+    if not ok then return nil end
+    return ch
 end
 
 --- patterns and functions for testing if a character should be considered a target ---
@@ -187,6 +182,9 @@ local defaultOptions = {
       Use 's' if this is your key for jumping.
       Can also use vim.api.nvim_replace_termcodes(*<C-smth>*, true, false, true)
     ]],
+    cancel_key = {
+        [vim.api.nvim_replace_termcodes('<esc>', true, false, true)] = true,
+    },
     key_groups = {} --[[
         map of (normalized) keys to their groups.
         labels from groups other than key_groups[target_char]
@@ -211,6 +209,7 @@ local function createOptions(opts)
     result.recover_key = opts.recover_key
     result.namespace = opts.namespace or defaultOptions.namespace
     result.target_display = opts.target_display or defaultOptions.target_display
+    result.cancel_key = opts.cancel_key or defaultOptions.cancel_key
 
     local l = opts.labels
     if l then result.labels = vim.list_extend({}, l)
@@ -695,6 +694,7 @@ local function jumpToWord(options, targetsInfo)
     local bgOptions = { priority = 65534 }
     local ns = options.namespace
     local backdrop = options.highlight.backdrop
+    local cancel_keys = options.cancel_key
     local function applyBg()
         -- For some reason, topLine and botLine are faster than 0 and last line
          --vim.highlight.range(bufId, ns, backdrop, { 0, 0 }, { vim.api.nvim_buf_line_count(bufId), -1 }, { }).
@@ -719,7 +719,7 @@ local function jumpToWord(options, targetsInfo)
 
     vim.cmd.redraw()
     local inputChar = get_input()
-    if inputChar == nil then return end
+    if inputChar == nil or cancel_keys[inputChar] then return end
 
     -- find group of targets that matches input characters
     local curTargetsChar = options.char_normalize(inputChar)
@@ -773,7 +773,7 @@ local function jumpToWord(options, targetsInfo)
 
         vim.cmd.redraw()
         inputChar = get_input()
-        if inputChar == nil then break end
+        if inputChar == nil or cancel_keys[inputChar] then return end
         local inputN = options.char_normalize(inputChar)
 
         local lastNewTarget = 0
