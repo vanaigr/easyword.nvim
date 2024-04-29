@@ -609,6 +609,7 @@ local function collectTargets(options)
     if debug then timer:add('labels') end
 
     -- remove targets with intersecting labels
+    -- Note: if 2 labels end at the same char, it's better to discard previous (longer)
     -- TODO: reassign labels? (should all be shorter than before, right?)
     if #wordStartTargets > 1 then
         -- Go through the visible targets once for each priority
@@ -624,7 +625,7 @@ local function collectTargets(options)
             elseif not t.hidden and t.priority == 0 then
                 -- remove intersecting at highest stage (since we're iterating them anyway)
                 if prev and t.line == prev.line and t.charI <= prev.charEndI then
-                    if prev.charEndI > t.charEndI then
+                    if prev.charEndI >= t.charEndI then
                         prev.hidden = true
                         prev = t
                     else
@@ -653,8 +654,7 @@ local function collectTargets(options)
                 local cur = wordStartTargets[i]
                 if not cur.hidden and cur.priority <= stage then
                     if cur.line == prev.line and cur.charI <= prev.charEndI then
-                        -- it's better to keep prev if priorities are equal and it stops at same column?
-                        if prev.priority > cur.priority or prev.charEndI > cur.charEndI then
+                        if prev.priority > cur.priority or prev.charEndI >= cur.charEndI then
                             prev.hidden = true
                             prev = cur
                         else
