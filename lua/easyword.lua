@@ -105,6 +105,8 @@ local function get_targets(bufId, topLine, botLine)
             table.insert(chars, '\n')
 
             -- if I could just use utf_ptr2CharInfo() ...
+            -- Note: ^ would actually make everything slower, since
+            -- using the lua stack for every function call is slooooow...
             local col = 1
             for i, cur in ipairs(chars) do
                 if test_split_identifiers(chars, i) then
@@ -654,7 +656,9 @@ local function collectTargets(options)
                 local cur = wordStartTargets[i]
                 if not cur.hidden and cur.priority <= stage then
                     if cur.line == prev.line and cur.charI <= prev.charEndI then
-                        if prev.priority > cur.priority or prev.charEndI >= cur.charEndI then
+                        if prev.priority > cur.priority
+                            or ((prev.priority == cur.priority) and prev.charEndI >= cur.charEndI)
+                        then
                             prev.hidden = true
                             prev = cur
                         else
