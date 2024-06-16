@@ -1,3 +1,5 @@
+-- TODO: add luadoc
+
 local vim = vim
 local unpack = table.unpack or unpack
 
@@ -177,7 +179,7 @@ local defaultOptions = {
     labels = defaultLabels,
     normalizedLabels = defaultLabels,
     char_normalize = defaultCharNormalize,
-    target_display = { ['\n'] = ' ' },
+    target_display = { ['\n'] = ' ' }, -- or "normalize"
     recover_key = nil --[[
       a char (string) that, when pressed after the jump,
       restarts the previous jump with the same labels and everything.
@@ -210,8 +212,12 @@ local function createOptions(opts)
 
     result.recover_key = opts.recover_key
     result.namespace = opts.namespace or defaultOptions.namespace
-    result.target_display = opts.target_display or defaultOptions.target_display
     result.cancel_key = opts.cancel_key or defaultOptions.cancel_key
+
+    local target_display = opts.target_display
+    if type(target_display) == 'table' then opts.target_display = target_display
+    elseif target_display == 'normalize' then opts.target_display = false
+    else opts.target_display = defaultOptions.target_display end
 
     local l = opts.labels
     if l then result.labels = vim.list_extend({}, l)
@@ -359,13 +365,18 @@ local function choose(cond, ifTrue, ifFalse)
     else return ifFalse end
 end
 
-local function displayLabel(target, options, stage)
+local function displayLabel(target, options, stage, normalizedChar)
     local hl = options.highlight
     local ns = options.namespace
     local displayLabels = options.labels
     local l = target.label
 
-    local char = options.target_display[target.char] or target.char
+    local char
+    if options.target_display then
+        char = options.target_display[target.char] or target.char
+    else
+        char = normalizedChar
+    end
 
     local virt_text
     if not l then -- if first target
@@ -713,9 +724,11 @@ local function jumpToWord(options, targetsInfo)
     local t
     if debug then t = Timer:new(); t:add('') end
 
-    for _, target in ipairs(wordStartTargets) do
-        if not target.hidden then
-            displayLabel(target, options, 0)
+    for char, targets in pairs(wordStartTargetsByChar) do
+        for _, target in ipairs(targets) do
+            if not target.hidden then
+                displayLabel(target, options, 0, char)
+            end
         end
     end
 
@@ -765,14 +778,14 @@ local function jumpToWord(options, targetsInfo)
     -- Don't remove garbage from the end of the array, just track where the end is.
     local lastCurTarget = lastVisibleI
 
-    -- find the terget to jump to, jump to that target
+    -- find the target to jump to, jump to that target
     local iteration = 1
     while true do
         vim.api.nvim_buf_clear_namespace(0, ns, 0, -1)
         applyBg()
 
         for i = 1, lastCurTarget do
-          displayLabel(curTargets[i], options, iteration)
+            displayLabel(curTargets[i], options, iteration, curTargetsChar)
         end
 
         vim.cmd.redraw()

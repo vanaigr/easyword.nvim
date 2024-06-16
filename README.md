@@ -32,8 +32,10 @@ are no targets after the cursor, the first target before the cursor is used.
 * Labels are specified with the `labels` option:
 `easyword.jump{ labels = { 'a', 'b', 'c' } }`.
 There must be a minimum of 3 label characters, and all characters must be distinct.
-* The `target_display` option determines the substitute characters for display.
+* The `target_display` option determines the substitute target characters for display.
 By default, `\n` is shown as a space. All label characters must occupy one display cell.
+Example: { '\n' = ' ' }.
+A special value "normalize" can be used. It makes characters display as normalized.
 
 ## Case and accent sensitivity
 
