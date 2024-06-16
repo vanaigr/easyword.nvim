@@ -866,7 +866,7 @@ local function feedRecoverKeyStep(params)
       if not ok then return end
 
       if string.sub(key, 1 + #typed, 1 + #typed + #ch-1) ~= ch then
-        vim.api.nvim_feedkeys(typed..ch, '', false)
+        vim.api.nvim_feedkeys(typed..ch, 't', false)
         return
       end
       if #key == #typed + #ch then break end
