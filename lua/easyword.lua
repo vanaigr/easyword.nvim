@@ -304,7 +304,7 @@ end
 -- generate variable length labels that use at most 2 characters, second char is always used only once at the end
 -- labels would contain max * { { repCount, repCharI, lastCharI }, ... }
 local function computeLabels(sameCharLabels, sameC, max, labels)
-    if max <= #sameCharLabels then return sameCharLabels end
+    if max <= sameC then return sameCharLabels end
 
     local regularEnd, sameI = 0, 0
     while regularEnd + sameC < max do
@@ -322,7 +322,7 @@ local function computeLabels(sameCharLabels, sameC, max, labels)
 
         curLabel[1] = curLabel[1] + 1
         sameI = sameI + 1
-        if sameI >= #sameCharLabels then sameI = 0 end
+        if sameI >= sameC then sameI = 0 end
     end
 
     -- Merge same char array and regular labels.
