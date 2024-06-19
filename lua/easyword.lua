@@ -481,7 +481,7 @@ local function collectTargets(options)
     if DEBUG then timer:add('targets') end
 
     if #wordStartTargets == 0 then
-        vim.api.nvim_echo({{ 'no targets', 'ErrorMsg' }}, true, {})
+        vim.notify('easyword.nvim: no targets', vim.log.levels.ERROR, {})
         return
     end
 
@@ -758,7 +758,7 @@ local function jumpToWord(options, targetsInfo)
     end
 
     if not curTargets or #curTargets == 0 then
-        vim.api.nvim_echo({{ 'no targets', 'ErrorMsg' }}, true, {})
+        vim.notify('easyword.nvim: no targets', vim.log.levels.ERROR, {})
         return
     end
 
@@ -824,7 +824,7 @@ local function jumpToWord(options, targetsInfo)
             return
         end
         if lastNewTarget == 0 then
-            vim.api.nvim_echo({{ 'no target', 'ErrorMsg' }}, true, {})
+            vim.notify('easyword.nvim: no target', vim.log.levels.ERROR, {})
             return
         end
 
@@ -837,12 +837,12 @@ local function handleJump(params)
   local options = params[1]
   local targets = params[2]
 
-  local ok, result = pcall(jumpToWord, options, targets)
+  local ok, result = xpcall(jumpToWord, debug.traceback, options, targets)
   vim.api.nvim_buf_clear_namespace(0, options.namespace, 0, -1)
   vim.cmd[=[redraw!]=]
 
   if not ok then
-    vim.api.nvim_echo({{'Error: '..vim.inspect(result), 'ErrorMsg'}}, true, {})
+      vim.notify('easyword.nvim. ERROR: '..result, vim.log.levels.ERROR, {})
     return
   end
 
@@ -891,9 +891,9 @@ local function feedRecoverKeyStep(params)
       typed = typed..ch
     end
 
-    local ok, res = pcall(handleJump, params)
+    local ok, res = xpcall(handleJump, debug.traceback, params)
     if not ok then
-      vim.api.nvim_echo({{'Error: '..vim.inspect(res), 'ErrorMsg'}}, true, {})
+      vim.notify('easyword.nvim. ERROR: '..res, vim.log.levels.ERROR, {})
     elseif res then
       feedRecoverKeyStep(params)
     end
@@ -908,9 +908,9 @@ end
 local function jump(opts)
     local options = createOptions(opts)
 
-    local ok, result = pcall(collectTargets, options)
+    local ok, result = xpcall(collectTargets, debug.traceback, options)
     if not ok then
-      vim.api.nvim_echo({{'Error: '..vim.inspect(result), 'ErrorMsg'}}, true, {})
+      vim.notify('easyword.nvim. ERROR: '..result, vim.log.levels.ERROR, {})
       return
     elseif result == nil then
       return
