@@ -215,7 +215,8 @@ local function createOptions(opts)
     result.cancel_key = opts.cancel_key or defaultOptions.cancel_key
 
     local target_display = opts.target_display
-    if type(target_display) == 'table' then result.target_display = target_display
+    if type(target_display) == 'table' then result.target_display = function(char) return target_display[char] end
+    elseif type(target_display) == 'function' then result.target_display = target_display
     else result.target_display = defaultOptions.target_display end
 
     local l = opts.labels
@@ -370,7 +371,8 @@ local function computeLabelDisplay(target, options, stage)
     local l = target.label
 
     local char
-    char = options.target_display[target.char] or target.char
+
+    char = options.target_display(target.char)
 
     local virt_text
     if not l then -- if first target
