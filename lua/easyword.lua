@@ -365,9 +365,8 @@ local function choose(cond, ifTrue, ifFalse)
     else return ifFalse end
 end
 
-local function displayLabel(target, options, stage, normalizedChar)
+local function computeLabelDisplay(target, options, stage, normalizedChar)
     local hl = options.highlight
-    local ns = options.namespace
     local displayLabels = options.labels
     local l = target.label
 
@@ -399,6 +398,12 @@ local function displayLabel(target, options, stage, normalizedChar)
         }
     end
 
+    return virt_text
+end
+
+local function displayLabel(target, options, stage, normalizedChar)
+    local ns = options.namespace
+    local virt_text = computeLabelDisplay(target, options, stage, normalizedChar)
     vim.api.nvim_buf_set_extmark(0, ns, target.line-1, target.col-1, {
       virt_text = virt_text, virt_text_pos = 'overlay', priority = 65535,
     })
@@ -922,8 +927,34 @@ if map then
     vim.keymap.set('n', 's', jump)
 end
 
+local function test(opts)
+    local options = createOptions(opts)
+    local result = collectTargets(options)
+    if not result then return print('none') end
+    for char, targets in pairs(result.targetsByChar) do
+        local seen = {}
+        for _, target in ipairs(targets) do
+            local res = computeLabelDisplay(target, options, 0, char)
+            local s = ''
+            for _, c in next, res, 1 do
+                s = s .. c[1]
+            end
+            if s == '' then s = res[1][1] end
+
+            for os, _ in pairs(seen) do
+                if os:sub(1, #s) == s then
+                    print('seen', char, s)
+                    error(52)
+                end
+            end
+            seen[s] = true
+        end
+    end
+end
+
 return {
     options = defaultOptions,
     apply_default_highlight = applyDefaultHighlight,
     jump = jump,
+    __test = test
 }
