@@ -5,11 +5,11 @@ local unpack = table.unpack or unpack
 
 local bit = require('bit')
 
-local debug = false
-local map = false
+local DEBUG = false
+local MAP = false
 
 local pcall = pcall
-if debug then pcall = function(f, ...) return true, f(...) end end
+if DEBUG then pcall = function(f, ...) return true, f(...) end end
 
 local function get_input()
     local ok, ch = pcall(vim.fn.getcharstr)
@@ -462,7 +462,7 @@ end
 
 local function collectTargets(options)
     local timer
-    if debug then timer = Timer:new(); timer:add('') end
+    if DEBUG then timer = Timer:new(); timer:add('') end
 
     local winid = vim.api.nvim_get_current_win()
     local bufId = vim.api.nvim_get_current_buf()
@@ -474,11 +474,11 @@ local function collectTargets(options)
     local cursorPos = vim.fn.getpos('.')
     local cursorLine, cursorCol = cursorPos[2], cursorPos[3]
 
-    if debug then timer:add('prep') end
+    if DEBUG then timer:add('prep') end
 
     -- find all tragets
     local wordStartTargets = get_targets(bufId, topLine, botLine)
-    if debug then timer:add('targets') end
+    if DEBUG then timer:add('targets') end
 
     if #wordStartTargets == 0 then
         vim.api.nvim_echo({{ 'no targets', 'ErrorMsg' }}, true, {})
@@ -509,7 +509,7 @@ local function collectTargets(options)
         end
     end
 
-    if debug then timer:add('remove at cursor') end
+    if DEBUG then timer:add('remove at cursor') end
 
     -- group targets by characters.
     -- Targets are kept in the same order
@@ -528,7 +528,7 @@ local function collectTargets(options)
         end
     end
 
-    if debug then timer:add('by word') end
+    if DEBUG then timer:add('by word') end
 
     local sameCharLabels, labels = {}, {}
     -- assign labels to groups of targets
@@ -624,7 +624,7 @@ local function collectTargets(options)
         end
     end
 
-    if debug then timer:add('labels') end
+    if DEBUG then timer:add('labels') end
 
     -- remove targets with intersecting labels
     -- Note: if 2 labels end at the same char, it's better to discard previous (longer)
@@ -689,7 +689,7 @@ local function collectTargets(options)
         end
     end
 
-    if debug then timer:add('remove overlap'); timer:print(); print(#wordStartTargets) end
+    if DEBUG then timer:add('remove overlap'); timer:print(); print(#wordStartTargets) end
 
     return {
       targets = wordStartTargets,
@@ -727,7 +727,7 @@ local function jumpToWord(options, targetsInfo)
     applyBg()
 
     local t
-    if debug then t = Timer:new(); t:add('') end
+    if DEBUG then t = Timer:new(); t:add('') end
 
     for char, targets in pairs(wordStartTargetsByChar) do
         for _, target in ipairs(targets) do
@@ -737,7 +737,7 @@ local function jumpToWord(options, targetsInfo)
         end
     end
 
-    if debug then t:add('targets'); t:print() end
+    if DEBUG then t:add('targets'); t:print() end
 
     vim.cmd.redraw()
     local inputChar = get_input()
@@ -922,7 +922,7 @@ local function jump(opts)
     end
 end
 
-if map then
+if MAP then
     applyDefaultHighlight()
     vim.keymap.set('n', 's', jump)
 end
