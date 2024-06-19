@@ -35,7 +35,6 @@ There must be a minimum of 3 label characters, and all characters must be distin
 * The `target_display` option determines the substitute target characters for display.
 By default, `\n` is shown as a space. All label characters must occupy one display cell.
 Example: { '\n' = ' ' }.
-A special value "normalize" can be used. It makes characters display as normalized.
 
 ## Case and accent sensitivity
 

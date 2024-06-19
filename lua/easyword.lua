@@ -179,7 +179,7 @@ local defaultOptions = {
     labels = defaultLabels,
     normalizedLabels = defaultLabels,
     char_normalize = defaultCharNormalize,
-    target_display = { ['\n'] = ' ' }, -- or "normalize"
+    target_display = { ['\n'] = ' ' },
     recover_key = nil --[[
       a char (string) that, when pressed after the jump,
       restarts the previous jump with the same labels and everything.
@@ -215,9 +215,8 @@ local function createOptions(opts)
     result.cancel_key = opts.cancel_key or defaultOptions.cancel_key
 
     local target_display = opts.target_display
-    if type(target_display) == 'table' then opts.target_display = target_display
-    elseif target_display == 'normalize' then opts.target_display = false
-    else opts.target_display = defaultOptions.target_display end
+    if type(target_display) == 'table' then result.target_display = target_display
+    else result.target_display = defaultOptions.target_display end
 
     local l = opts.labels
     if l then result.labels = vim.list_extend({}, l)
@@ -365,17 +364,13 @@ local function choose(cond, ifTrue, ifFalse)
     else return ifFalse end
 end
 
-local function computeLabelDisplay(target, options, stage, normalizedChar)
+local function computeLabelDisplay(target, options, stage)
     local hl = options.highlight
     local displayLabels = options.labels
     local l = target.label
 
     local char
-    if options.target_display then
-        char = options.target_display[target.char] or target.char
-    else
-        char = normalizedChar
-    end
+    char = options.target_display[target.char] or target.char
 
     local virt_text
     if not l then -- if first target
@@ -401,9 +396,9 @@ local function computeLabelDisplay(target, options, stage, normalizedChar)
     return virt_text
 end
 
-local function displayLabel(target, options, stage, normalizedChar)
+local function displayLabel(target, options, stage)
     local ns = options.namespace
-    local virt_text = computeLabelDisplay(target, options, stage, normalizedChar)
+    local virt_text = computeLabelDisplay(target, options, stage)
     vim.api.nvim_buf_set_extmark(0, ns, target.line-1, target.col-1, {
       virt_text = virt_text, virt_text_pos = 'overlay', priority = 65535,
     })
@@ -732,7 +727,7 @@ local function jumpToWord(options, targetsInfo)
     for char, targets in pairs(wordStartTargetsByChar) do
         for _, target in ipairs(targets) do
             if not target.hidden then
-                displayLabel(target, options, 0, char)
+                displayLabel(target, options, 0)
             end
         end
     end
@@ -790,7 +785,7 @@ local function jumpToWord(options, targetsInfo)
         applyBg()
 
         for i = 1, lastCurTarget do
-            displayLabel(curTargets[i], options, iteration, curTargetsChar)
+            displayLabel(curTargets[i], options, iteration)
         end
 
         vim.cmd.redraw()
@@ -934,7 +929,7 @@ local function test(opts)
     for char, targets in pairs(result.targetsByChar) do
         local seen = {}
         for _, target in ipairs(targets) do
-            local res = computeLabelDisplay(target, options, 0, char)
+            local res = computeLabelDisplay(target, options, 0)
             local s = ''
             for _, c in next, res, 1 do
                 s = s .. c[1]
