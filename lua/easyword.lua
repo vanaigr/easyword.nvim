@@ -48,6 +48,36 @@ local function category(char)
     return 0
 end
 
+-- note: neovim thinks that if a string contains NUL,
+-- it must be a blob. And then vim.fn.split() crashes w/ E976
+-- decode.c - decode_string() - really_hasnul
+-- converter.c - nlua_pop_typval()
+-- executor.c - nlua_call()
+local function splitByChar2(str)
+    local fix_vim_bugs = str:find('\0')
+
+    if fix_vim_bugs then
+        -- string.gsub(str, string.char(0), ...) DOESNT WORK! use '%z'
+        -- https://github.com/LuaJIT/LuaJIT/issues/759
+        str = str:gsub('\10', '\10\10'):gsub('%z', '\10\9')
+    end
+
+    local list = vim.fn.split(str, '\\zs')
+
+    if fix_vim_bugs then
+        local i = 1
+        while i <= #list - 1 do
+            if list[i] == '\10' then
+                table.remove(list, i)
+                if list[i] == '\9' then list[i] = '\0' end
+            end
+            i = i + 1 -- note: even if one element was removed
+        end
+    end
+
+    return list
+end
+
 local function splitByChars(str)
     if #str == 0 then return {} end
 
@@ -68,7 +98,9 @@ local function splitByChars(str)
             i = i + 1
         end
     end
-    vim.list_extend(result, vim.fn.split(str:sub(i), '\\zs'))
+
+    vim.list_extend(result, splitByChar2(str:sub(i)))
+
     return result
 end
 
@@ -179,7 +211,7 @@ local defaultOptions = {
     labels = defaultLabels,
     normalizedLabels = defaultLabels,
     char_normalize = defaultCharNormalize,
-    target_display = { ['\n'] = ' ' },
+    target_display = function(char) if char == '\n' then return ' ' else return char end end,
     recover_key = nil --[[
       a char (string) that, when pressed after the jump,
       restarts the previous jump with the same labels and everything.
