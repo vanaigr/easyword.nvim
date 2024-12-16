@@ -324,8 +324,8 @@ local function applyDefaultHighlight(opts)
         bg = 'white', fg = 'black', sp = 'red', underline = true, bold = true,
     })
 
-    vim.api.nvim_set_hl(0, options.highlight.rest_char, { fg = 'grey', sp='grey', underline = true, bold = true })
-    vim.api.nvim_set_hl(0, options.highlight.typed_char, { fg = 'grey', sp = 'red', underline = true, bold = true })
+    vim.api.nvim_set_hl(0, options.highlight.rest_char, { fg = 'grey', bg = 'black', underline = true, bold = true })
+    vim.api.nvim_set_hl(0, options.highlight.typed_char, { fg = 'grey', bg = 'black', sp = 'red', underline = true, bold = true })
 
     vim.api.nvim_set_hl(0, options.highlight.rest_label, { bg = 'black', fg = 'white', bold = true })
     vim.api.nvim_set_hl(0, options.highlight.typed_label, { sp = 'red', underline = true, bold  =  true })
