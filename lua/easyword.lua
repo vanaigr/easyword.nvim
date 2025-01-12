@@ -209,6 +209,7 @@ local defaultLabels = {
 local defaultOptions = {
     -- must be all unique and 1 cell wide. #labels >= 3
     labels = defaultLabels,
+    jumplist = true,
     normalizedLabels = defaultLabels,
     char_normalize = defaultCharNormalize,
     target_display = function(char) if char == '\n' then return ' ' else return char end end,
@@ -245,6 +246,12 @@ local function createOptions(opts)
     result.recover_key = opts.recover_key
     result.namespace = opts.namespace or defaultOptions.namespace
     result.cancel_key = opts.cancel_key or defaultOptions.cancel_key
+
+    if opts.jumplist == nil then
+        result.jumplist = defaultOptions.jumplist
+    else
+        result.jumplist = not not opts.jumplist
+    end
 
     local target_display = opts.target_display
     if type(target_display) == 'table' then result.target_display = function(char) return target_display[char] end
@@ -728,7 +735,7 @@ local function collectTargets(options)
     }
 end
 
-local function jumpToWord(options, targetsInfo)
+local function jumpToWord(options, targetsInfo, recovering)
     --local winid = targetsInfo.win
     local bufId = targetsInfo.buf
 
@@ -849,6 +856,9 @@ local function jumpToWord(options, targetsInfo)
         end
 
         if found then
+            if not recovering and options.jumplist then
+                vim.cmd("normal! m'")
+            end
             vim.fn.setpos('.', { 0, found.line, found.col, 0, found.charI })
             return
         end
@@ -862,11 +872,11 @@ local function jumpToWord(options, targetsInfo)
     end
 end
 
-local function handleJump(params)
+local function handleJump(params, recovering)
   local options = params[1]
   local targets = params[2]
 
-  local ok, result = xpcall(jumpToWord, debug.traceback, options, targets)
+  local ok, result = xpcall(jumpToWord, debug.traceback, options, targets, recovering)
   vim.api.nvim_buf_clear_namespace(0, options.namespace, 0, -1)
   vim.cmd[=[redraw!]=]
 
@@ -920,7 +930,7 @@ local function feedRecoverKeyStep(params)
       typed = typed..ch
     end
 
-    local ok, res = xpcall(handleJump, debug.traceback, params)
+    local ok, res = xpcall(handleJump, debug.traceback, params, true)
     if not ok then
       vim.notify('easyword.nvim. ERROR: '..res, vim.log.levels.ERROR, {})
     elseif res then
@@ -946,7 +956,7 @@ local function jump(opts)
     end
 
     local params = { options, result }
-    if handleJump(params) == true then
+    if handleJump(params, false) == true then
       feedRecoverKeyStep(params)
     end
 end
